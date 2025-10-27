@@ -1,5 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { 
+  validatePlayerName, 
+  validateRoomId 
+} from '../utils/validation';
 
 function Home() {
   const [step, setStep] = useState('name');
@@ -9,26 +13,52 @@ function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   
-  // ✅ حالة جديدة للاسم المكرر
+  // ✅ حالة للاسم المكرر
   const [duplicateName, setDuplicateName] = useState(false);
   const [newPlayerName, setNewPlayerName] = useState('');
   
   const navigate = useNavigate();
 
-  const API_URL = 'http://192.168.1.142:3000/api';
+  const API_URL = 'http://192.168.1.2:3000/api';
 
+  // ✅ تحميل الاسم المحفوظ من localStorage عند بدء التشغيل
+  useEffect(() => {
+    const savedName = localStorage.getItem('playerName');
+    if (savedName && savedName.trim()) {
+      console.log('📋 تم تحميل الاسم المحفوظ:', savedName);
+      setPlayerName(savedName);
+      setStep('action'); // الانتقال مباشرة لشاشة الاختيار
+    }
+  }, []);
+
+  // ✅ التحقق من الاسم عند الانتقال للخطوة التالية
   const handleNameSubmit = (e) => {
     e.preventDefault();
-    if (!playerName.trim()) {
-      setError('الرجاء إدخال اسمك');
+    
+    const nameValidation = validatePlayerName(playerName);
+    if (!nameValidation.isValid) {
+      setError(nameValidation.errors[0]);
       return;
     }
+    
+    // ✅ حفظ الاسم في localStorage
+    localStorage.setItem('playerName', nameValidation.sanitized);
+    console.log('💾 تم حفظ الاسم:', nameValidation.sanitized);
+    
     setError('');
     setStep('action');
   };
 
+  // ✅ إنشاء غرفة مع validation
   const handleCreateRoom = async () => {
     if (!selectedGame) return;
+    
+    // التحقق من الاسم مرة أخرى
+    const nameValidation = validatePlayerName(playerName);
+    if (!nameValidation.isValid) {
+      setError(nameValidation.errors[0]);
+      return;
+    }
     
     setLoading(true);
     setError('');
@@ -38,33 +68,48 @@ function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          playerName: playerName.trim(),
+          playerName: nameValidation.sanitized, // ✅ استخدام الاسم المنظف
           gameType: selectedGame
         })
       });
 
       const data = await response.json();
       
-      if (!response.ok) throw new Error(data.error);
+      if (!response.ok) {
+        setError(data.error || 'حدث خطأ في إنشاء الغرفة');
+        setLoading(false);
+        return;
+      }
 
       navigate('/lobby', { 
         state: { 
           roomId: data.roomId, 
-          playerName: playerName.trim(), 
+          playerName: nameValidation.sanitized, 
           gameType: selectedGame, 
           isHost: true 
         } 
       });
     } catch (err) {
-      setError(err.message || 'حدث خطأ في إنشاء الغرفة');
+      console.error('❌ خطأ في إنشاء الغرفة:', err);
+      setError('فشل الاتصال بالسيرفر. تحقق من اتصالك بالإنترنت.');
     } finally {
       setLoading(false);
     }
   };
 
+  // ✅ الانضمام لغرفة مع validation
   const handleJoinRoom = async () => {
-    if (!roomId.trim()) {
-      setError('الرجاء إدخال رمز الغرفة');
+    // التحقق من الاسم
+    const nameValidation = validatePlayerName(playerName);
+    if (!nameValidation.isValid) {
+      setError(nameValidation.errors[0]);
+      return;
+    }
+
+    // التحقق من Room ID
+    const roomIdValidation = validateRoomId(roomId);
+    if (!roomIdValidation.isValid) {
+      setError(roomIdValidation.errors[0]);
       return;
     }
 
@@ -72,10 +117,12 @@ function Home() {
     setError('');
 
     try {
-      const response = await fetch(`${API_URL}/game/join/${roomId.trim().toUpperCase()}`, {
+      const response = await fetch(`${API_URL}/game/join/${roomIdValidation.sanitized}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerName: playerName.trim() })
+        body: JSON.stringify({ 
+          playerName: nameValidation.sanitized // ✅ استخدام الاسم المنظف
+        })
       });
 
       const data = await response.json();
@@ -89,28 +136,40 @@ function Home() {
           setLoading(false);
           return;
         }
-        throw new Error(data.error);
+        setError(data.error || 'حدث خطأ في الانضمام للغرفة');
+        setLoading(false);
+        return;
       }
 
       navigate('/lobby', { 
         state: { 
-          roomId: roomId.trim().toUpperCase(), 
-          playerName: playerName.trim(), 
+          roomId: roomIdValidation.sanitized, 
+          playerName: nameValidation.sanitized, 
           gameType: data.gameType,
           isHost: false 
         } 
       });
     } catch (err) {
-      setError(err.message || 'حدث خطأ في الانضمام للغرفة');
+      console.error('❌ خطأ في الانضمام:', err);
+      setError('فشل الاتصال بالسيرفر. تحقق من اتصالك بالإنترنت.');
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ دالة لإعادة محاولة الانضمام باسم جديد
+  // ✅ إعادة محاولة الانضمام باسم جديد
   const handleRetryWithNewName = async () => {
-    if (!newPlayerName.trim()) {
-      setError('الرجاء إدخال اسم جديد');
+    // التحقق من الاسم الجديد
+    const nameValidation = validatePlayerName(newPlayerName);
+    if (!nameValidation.isValid) {
+      setError(nameValidation.errors[0]);
+      return;
+    }
+
+    // التحقق من Room ID
+    const roomIdValidation = validateRoomId(roomId);
+    if (!roomIdValidation.isValid) {
+      setError(roomIdValidation.errors[0]);
       return;
     }
 
@@ -118,10 +177,12 @@ function Home() {
     setError('');
 
     try {
-      const response = await fetch(`${API_URL}/game/join/${roomId.trim().toUpperCase()}`, {
+      const response = await fetch(`${API_URL}/game/join/${roomIdValidation.sanitized}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ playerName: newPlayerName.trim() })
+        body: JSON.stringify({ 
+          playerName: nameValidation.sanitized 
+        })
       });
 
       const data = await response.json();
@@ -133,123 +194,141 @@ function Home() {
           setLoading(false);
           return;
         }
-        throw new Error(data.error);
+        setError(data.error || 'حدث خطأ في الانضمام للغرفة');
+        setLoading(false);
+        return;
       }
 
-      // ✅ نجحت! حدّث اسم اللاعب الأساسي
-      setPlayerName(newPlayerName.trim());
+      // ✅ نجحت! حدّث اسم اللاعب الأساسي واحفظه
+      setPlayerName(nameValidation.sanitized);
+      localStorage.setItem('playerName', nameValidation.sanitized);
+      console.log('💾 تم تحديث وحفظ الاسم:', nameValidation.sanitized);
       
       navigate('/lobby', { 
         state: { 
-          roomId: roomId.trim().toUpperCase(), 
-          playerName: newPlayerName.trim(), 
+          roomId: roomIdValidation.sanitized, 
+          playerName: nameValidation.sanitized, 
           gameType: data.gameType,
           isHost: false 
         } 
       });
     } catch (err) {
-      setError(err.message || 'حدث خطأ في الانضمام للغرفة');
+      console.error('❌ خطأ في الانضمام:', err);
+      setError('فشل الاتصال بالسيرفر. تحقق من اتصالك بالإنترنت.');
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ دالة للرجوع من شاشة تغيير الاسم
+  // ✅ الرجوع من شاشة تغيير الاسم
   const handleCancelNameChange = () => {
     setDuplicateName(false);
     setNewPlayerName('');
     setError('');
   };
 
+  // ✅ دالة لتغيير الاسم (زر جديد)
+  const handleChangeName = () => {
+    setStep('name');
+    setError('');
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4 py-8 md:py-12">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        
         {/* Step 1: Name Input */}
         {step === 'name' && (
           <div className="bg-slate-800/50 backdrop-blur-xl rounded-3xl p-6 md:p-8 border border-purple-500/20 shadow-2xl">
-            <div className="text-center mb-6 md:mb-8">
-              <div className="inline-block p-3 md:p-4 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl mb-3 md:mb-4">
-                <span className="text-4xl md:text-5xl">🎮</span>
+            <div className="text-center mb-5 md:mb-6">
+              <div className="inline-block p-3 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl mb-3">
+                <span className="text-3xl md:text-4xl">🎮</span>
               </div>
-              <h1 className="text-2xl md:text-3xl font-bold text-white mb-2">
+              <h1 className="text-2xl md:text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 mb-2">
                 مرحباً بك!
               </h1>
-              <p className="text-purple-300 text-sm md:text-base">
-                ابدأ بإدخال اسمك
+              <p className="text-purple-300 text-xs md:text-sm">
+                أدخل اسمك للبدء
               </p>
             </div>
 
             <form onSubmit={handleNameSubmit} className="space-y-4">
-              <input
-                type="text"
-                value={playerName}
-                onChange={(e) => setPlayerName(e.target.value)}
-                placeholder="اسمك"
-                className="w-full px-4 md:px-6 py-3 md:py-4 bg-slate-700/50 border border-purple-500/30 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-center text-base md:text-lg"
-                maxLength={20}
-                autoFocus
-              />
+              <div>
+                <input
+                  type="text"
+                  value={playerName}
+                  onChange={(e) => setPlayerName(e.target.value)}
+                  placeholder="اسمك (2-20 حرف)"
+                  className="w-full px-4 md:px-6 py-3 md:py-4 bg-slate-700/50 border border-purple-500/30 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-center text-base md:text-lg"
+                  maxLength={20}
+                  autoFocus
+                />
+                <p className="mt-1 text-xs text-slate-400 text-center">
+                  {playerName.length}/20 حرف
+                </p>
+              </div>
 
               {error && (
                 <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-xl text-sm text-center">
-                  {error}
+                  ⚠️ {error}
                 </div>
               )}
 
               <button
                 type="submit"
                 disabled={!playerName.trim()}
-                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-bold py-3 md:py-4 px-6 rounded-xl transition-all disabled:cursor-not-allowed shadow-lg hover:shadow-purple-500/50 disabled:shadow-none"
+                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 disabled:from-slate-700 disabled:to-slate-700 text-white font-bold py-3 md:py-4 px-6 rounded-xl transition-all disabled:cursor-not-allowed shadow-lg hover:shadow-purple-500/50"
               >
-                التالي
+                التالي →
               </button>
             </form>
+
+            <div className="mt-6 pt-6 border-t border-slate-700">
+              <div className="text-center text-xs md:text-sm text-purple-300 space-y-2">
+                <p>💡 اختر اسماً مميزاً</p>
+                <p>✨ سيتم حفظ اسمك للمرات القادمة</p>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Step 2: Action Selection */}
+        {/* Step 2: Choose Action */}
         {step === 'action' && (
           <div className="bg-slate-800/50 backdrop-blur-xl rounded-3xl p-6 md:p-8 border border-purple-500/20 shadow-2xl">
-            <div className="text-center mb-6 md:mb-8">
-              <div className="inline-block p-3 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl mb-3">
-                <span className="text-3xl md:text-4xl">👋</span>
-              </div>
+            <div className="text-center mb-5 md:mb-6">
               <h2 className="text-xl md:text-2xl font-bold text-white mb-2">
-                أهلاً {playerName}!
+                مرحباً، {playerName}! 👋
               </h2>
-              <p className="text-purple-300 text-sm md:text-base">
+              <p className="text-purple-300 text-xs md:text-sm">
                 ماذا تريد أن تفعل؟
               </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-3 mb-4">
               <button
                 onClick={() => setStep('create')}
-                className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-4 md:py-5 px-6 rounded-xl transition-all shadow-lg hover:shadow-green-500/50 hover:scale-105"
+                className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-4 md:py-5 px-6 rounded-xl transition-all shadow-lg hover:shadow-green-500/50 flex items-center justify-center gap-3"
               >
-                <div className="text-2xl md:text-3xl mb-1">➕</div>
-                <div className="text-base md:text-lg">إنشاء لعبة جديدة</div>
+                <span className="text-2xl">🎮</span>
+                <span className="text-base md:text-lg">إنشاء غرفة جديدة</span>
               </button>
 
               <button
                 onClick={() => setStep('join')}
-                className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold py-4 md:py-5 px-6 rounded-xl transition-all shadow-lg hover:shadow-blue-500/50 hover:scale-105"
+                className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold py-4 md:py-5 px-6 rounded-xl transition-all shadow-lg hover:shadow-blue-500/50 flex items-center justify-center gap-3"
               >
-                <div className="text-2xl md:text-3xl mb-1">🚪</div>
-                <div className="text-base md:text-lg">الانضمام لغرفة</div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setStep('name');
-                  setError('');
-                }}
-                className="w-full bg-slate-700/50 hover:bg-slate-700 text-slate-300 font-semibold py-3 px-6 rounded-xl transition-all"
-              >
-                ← رجوع
+                <span className="text-2xl">🚪</span>
+                <span className="text-base md:text-lg">الانضمام لغرفة</span>
               </button>
             </div>
+
+            {/* ✅ زر تغيير الاسم */}
+            <button
+              onClick={handleChangeName}
+              className="w-full bg-slate-700/50 hover:bg-slate-700 text-slate-300 font-semibold py-3 px-6 rounded-xl transition-all flex items-center justify-center gap-2"
+            >
+              <span>✏️</span>
+              <span>تغيير الاسم</span>
+            </button>
           </div>
         )}
 
@@ -299,7 +378,7 @@ function Home() {
 
             {error && (
               <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-xl text-sm text-center mb-4">
-                {error}
+                ⚠️ {error}
               </div>
             )}
 
@@ -346,7 +425,7 @@ function Home() {
                 type="text"
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                placeholder="رمز الغرفة (مثال: ABC123)"
+                placeholder="رمز الغرفة (6 أحرف)"
                 className="w-full px-4 md:px-6 py-3 md:py-4 bg-slate-700/50 border border-purple-500/30 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 transition-all text-center text-base md:text-lg font-mono tracking-widest"
                 maxLength={6}
                 autoFocus
@@ -354,7 +433,7 @@ function Home() {
 
               {error && (
                 <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-xl text-sm text-center">
-                  {error}
+                  ⚠️ {error}
                 </div>
               )}
 
@@ -380,7 +459,7 @@ function Home() {
           </div>
         )}
 
-        {/* ✅✅✅ Step 5: Change Duplicate Name ✅✅✅ */}
+        {/* Step 5: Change Duplicate Name */}
         {step === 'join' && duplicateName && (
           <div className="bg-slate-800/50 backdrop-blur-xl rounded-3xl p-6 md:p-8 border border-yellow-500/30 shadow-2xl">
             <div className="text-center mb-5 md:mb-6">
@@ -407,16 +486,19 @@ function Home() {
                   type="text"
                   value={newPlayerName}
                   onChange={(e) => setNewPlayerName(e.target.value)}
-                  placeholder="اختر اسماً جديداً"
+                  placeholder="اختر اسماً جديداً (2-20 حرف)"
                   className="w-full px-4 md:px-6 py-3 md:py-4 bg-slate-700/50 border border-yellow-500/30 rounded-xl text-white placeholder-slate-400 focus:outline-none focus:border-yellow-500 focus:ring-2 focus:ring-yellow-500/20 transition-all text-center text-base md:text-lg"
                   maxLength={20}
                   autoFocus
                 />
+                <p className="mt-1 text-xs text-slate-400 text-center">
+                  {newPlayerName.length}/20 حرف
+                </p>
               </div>
 
               {error && (
                 <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-xl text-sm text-center">
-                  {error}
+                  ⚠️ {error}
                 </div>
               )}
 

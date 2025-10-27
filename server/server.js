@@ -34,7 +34,7 @@ const GameResult = mongoose.model('GameResult', {
 // متغيرات اللعبة
 const rooms = new Map();
 
-// قوائم الفئات (للعبة الفئات)
+// قوائم الفئات
 const categories = {
   animals: [
     'قط', 'كلب', 'أسد', 'فيل', 'نمر', 'دب', 'ذئب', 'ثعلب', 'أرنب', 'غزال', 
@@ -53,14 +53,12 @@ const categories = {
   math: []
 };
 
-// معلومات الفئات
 const categoryInfo = [
   { id: 'animals', name: 'حيوانات', icon: '🐱', duration: 20 },
   { id: 'fruits', name: 'فواكه', icon: '🍎', duration: 20 },
   { id: 'math', name: 'عمليات حسابية', icon: '➗', duration: 20 }
 ];
 
-// قائمة كلمات عشوائية للرسم
 const randomWords = [
   'سيارة', 'شجرة', 'قطة', 'كلب', 'بيت', 'شمس', 'قمر', 'نجمة', 'زهرة', 'سمكة',
   'طائرة', 'قارب', 'دراجة', 'كرة', 'كتاب', 'قلم', 'كوب', 'طاولة', 'كرسي', 'باب',
@@ -69,7 +67,6 @@ const randomWords = [
   'تفاح', 'موز', 'برتقال', 'عنب', 'بطيخ', 'جبل', 'نهر', 'بحر', 'سحابة', 'مطر'
 ];
 
-// دالة لتوحيد النص
 function normalizeText(text) {
   return text
     .trim()
@@ -79,7 +76,6 @@ function normalizeText(text) {
     .replace(/\s+/g, ' ');
 }
 
-// دالة لتوليد سؤال رياضي
 function generateMathQuestion() {
   const operations = ['+', '-', '×', '÷'];
   const operation = operations[Math.floor(Math.random() * operations.length)];
@@ -110,21 +106,62 @@ function generateMathQuestion() {
   };
 }
 
-// ✅ دالة لنقل الهوست للاعب التالي
+// ✅ دالة محسّنة لنقل الهوست
 function transferHost(room) {
-  if (!room || room.players.length === 0) return false;
-  
-  // البحث عن لاعب متصل ليصبح الهوست الجديد
-  const newHost = room.players.find(p => p.id !== null);
-  
-  if (newHost) {
-    const oldHost = room.hostName;
-    room.hostName = newHost.name;
-    console.log(`👑 تم نقل الهوست من ${oldHost} إلى ${newHost.name}`);
-    return true;
+  if (!room || room.players.length === 0) {
+    console.log('❌ لا يمكن نقل الهوست - لا يوجد لاعبين');
+    return false;
   }
   
-  return false;
+  const oldHost = room.hostName;
+  
+  // ✅ البحث عن لاعب متصل (id !== null) وليس في وضع الانقطاع
+  const connectedPlayers = room.players.filter(p => 
+    p.id !== null && 
+    !p.disconnectTimeout // ✅ ليس في فترة الانتظار للمغادرة
+  );
+  
+  if (connectedPlayers.length === 0) {
+    console.log('❌ لا يوجد لاعبين متصلين لنقل الهوست إليهم');
+    return false;
+  }
+  
+  // ✅ اختيار أول لاعب متصل ليصبح الهوست
+  const newHost = connectedPlayers[0];
+  
+  room.hostName = newHost.name;
+  console.log(`👑 تم نقل الهوست من ${oldHost} إلى ${newHost.name}`);
+  
+  return true;
+}
+
+// ✅ دالة لحساب الوقت المتبقي بدقة
+function calculateTimeLeft(startTime, duration) {
+  if (!startTime) return duration;
+  
+  const now = Date.now();
+  const elapsed = Math.floor((now - startTime) / 1000);
+  const remaining = Math.max(0, duration - elapsed);
+  
+  return remaining;
+}
+
+// ✅ دالة لمزامنة الوقت مع جميع اللاعبين
+function syncTimeWithClients(roomId, room, eventName, additionalData = {}) {
+  if (!room.categoryStartTime && !room.roundStartTime) return;
+  
+  const startTime = room.categoryStartTime || room.roundStartTime;
+  const duration = room.gameType === 'drawing' ? 60 : 
+                   (room.currentCategory < categoryInfo.length ? 
+                    categoryInfo[room.currentCategory].duration : 20);
+  
+  const timeLeft = calculateTimeLeft(startTime, duration);
+  
+  io.to(roomId).emit(eventName, {
+    ...additionalData,
+    timeLeft,
+    serverTime: Date.now() // ✅ إرسال وقت السيرفر للمزامنة
+  });
 }
 
 // ================ API Endpoints ================
@@ -144,7 +181,8 @@ app.post('/api/game/create', (req, res) => {
       name: playerName,
       score: 0,
       answers: [],
-      remainingGuesses: 5
+      remainingGuesses: 5,
+      lastUpdateTime: Date.now() // ✅ تتبع آخر تحديث
     }],
     status: 'waiting',
     gameType: gameType || 'categories',
@@ -197,7 +235,6 @@ app.post('/api/game/join/:roomId', (req, res) => {
     return res.status(400).json({ error: 'الغرفة ممتلئة' });
   }
 
-  // ✅ التحقق من عدم وجود اسم مكرر
   const nameExists = room.players.some(p => 
     p.name.trim().toLowerCase() === playerName.trim().toLowerCase()
   );
@@ -213,7 +250,8 @@ app.post('/api/game/join/:roomId', (req, res) => {
     name: playerName,
     score: 0,
     answers: [],
-    remainingGuesses: 5
+    remainingGuesses: 5,
+    lastUpdateTime: Date.now() // ✅ تتبع آخر تحديث
   });
 
   res.json({ 
@@ -254,7 +292,7 @@ app.post('/api/game/result', async (req, res) => {
   }
 });
 
-// ================ Socket.IO للـ Real-time ================
+// ================ Socket.IO ================
 
 io.on('connection', (socket) => {
   console.log('🟢 لاعب جديد متصل:', socket.id);
@@ -273,20 +311,39 @@ io.on('connection', (socket) => {
       room.currentMathQuestion = mathQuestion;
     }
     
+    // ✅ حفظ وقت البدء بدقة
     const startTime = Date.now();
     room.categoryStartTime = startTime;
     
-    console.log(`🎯 بدء فئة: ${category.name} في الغرفة ${roomId}`);
+    console.log(`🎯 بدء فئة: ${category.name} في الغرفة ${roomId} - الوقت: ${startTime}`);
     
     io.to(roomId).emit('category-started', {
       category: category,
       categoryNumber: room.currentCategory + 1,
       totalCategories: categoryInfo.length,
       mathQuestion: mathQuestion,
-      startTime: startTime
+      startTime: startTime,
+      timeLeft: category.duration, // ✅ الوقت الكامل
+      serverTime: Date.now() // ✅ وقت السيرفر للمزامنة
     });
 
+    // ✅ تحديث الوقت كل 5 ثواني للمزامنة
+    const syncInterval = setInterval(() => {
+      const timeLeft = calculateTimeLeft(startTime, category.duration);
+      
+      if (timeLeft <= 0) {
+        clearInterval(syncInterval);
+      } else {
+        // إرسال تحديث للوقت لجميع اللاعبين
+        io.to(roomId).emit('time-sync', {
+          timeLeft,
+          serverTime: Date.now()
+        });
+      }
+    }, 5000);
+
     setTimeout(() => {
+      clearInterval(syncInterval);
       endCategory(roomId);
     }, category.duration * 1000);
   };
@@ -315,7 +372,7 @@ io.on('connection', (socket) => {
           score: p.score
         }));
       
-      console.log('🏁 انتهت لعبة الفئات في الغرفة', roomId, '- النتائج:', results);
+      console.log('🏁 انتهت لعبة الفئات في الغرفة', roomId);
 
       io.to(roomId).emit('game-finished', {
         results: results,
@@ -344,32 +401,59 @@ io.on('connection', (socket) => {
     }
 
     room.guessedPlayers = [];
-    room.roundStartTime = Date.now();
+    
+    // ✅ حفظ وقت البدء بدقة
+    const startTime = Date.now();
+    room.roundStartTime = startTime;
     room.canvasDrawings = [];
+    room.roundActive = true; // ✅ تفعيل الجولة لقبول التخمينات
     
     room.players.forEach(player => {
       player.remainingGuesses = 5;
     });
 
-    console.log(`🎨 بدء جولة الرسم: ${drawer.name} سيرسم "${word}" - الجولة ${room.currentRound + 1}/${room.players.length}`);
+    console.log(`🎨 بدء جولة الرسم: ${drawer.name} سيرسم "${word}" - ${startTime}`);
 
+    // ✅ إرسال للرسام
     io.to(drawer.id).emit('your-turn-to-draw', {
       word: word,
       round: room.currentRound + 1,
-      totalRounds: room.players.length
+      totalRounds: room.players.length,
+      startTime: startTime,
+      timeLeft: 60,
+      serverTime: Date.now()
     });
 
+    // ✅ إرسال للمشاهدين
     room.players.forEach(player => {
       if (player.id !== drawer.id) {
         io.to(player.id).emit('someone-drawing', {
           drawerName: drawer.name,
           round: room.currentRound + 1,
-          totalRounds: room.players.length
+          totalRounds: room.players.length,
+          startTime: startTime,
+          timeLeft: 60,
+          serverTime: Date.now()
         });
       }
     });
 
+    // ✅ مزامنة الوقت كل 5 ثواني
+    const syncInterval = setInterval(() => {
+      const timeLeft = calculateTimeLeft(startTime, 60);
+      
+      if (timeLeft <= 0) {
+        clearInterval(syncInterval);
+      } else {
+        io.to(roomId).emit('time-sync', {
+          timeLeft,
+          serverTime: Date.now()
+        });
+      }
+    }, 5000);
+
     room.roundTimer = setTimeout(() => {
+      clearInterval(syncInterval);
       endDrawingRound(roomId);
     }, 60000);
   };
@@ -378,22 +462,48 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || room.gameType !== 'drawing') return;
 
+    // ✅ تعيين الجولة كمنتهية لمنع قبول تخمينات إضافية
+    room.roundActive = false;
+
     if (room.roundTimer) {
       clearTimeout(room.roundTimer);
       room.roundTimer = null;
     }
 
     const word = room.drawingWords[room.currentDrawer];
+    const drawer = room.players[room.currentDrawer];
     
-    console.log(`⏱️ انتهت جولة الرسم ${room.currentRound + 1}. الكلمة كانت: "${word}"`);
+    // ✅ حساب نقاط الرسام
+    const totalPlayers = room.players.length - 1; // عدد اللاعبين غير الرسام
+    const guessedCount = room.guessedPlayers.length;
+    const allGuessed = guessedCount === totalPlayers;
+    
+    // نظام النقاط: (عدد_اللي_خمنوا × 25) + مكافأة_الإجماع
+    let drawerPoints = guessedCount * 25;
+    if (allGuessed && guessedCount > 0) {
+      drawerPoints += 50; // مكافأة الإجماع
+    }
+    
+    drawer.score += drawerPoints;
+    
+    console.log(`🎨 ${drawer.name} (الرسام) حصل على ${drawerPoints} نقطة (${guessedCount}/${totalPlayers} خمنوا${allGuessed ? ' + إجماع' : ''})`);
+    console.log(`⏱️ انتهت جولة الرسم ${room.currentRound + 1}`);
 
     io.to(roomId).emit('round-ended', {
       word: word,
+      drawerPoints: drawerPoints,
+      drawerName: drawer.name,
+      guessedCount: guessedCount,
+      totalPlayers: totalPlayers,
+      allGuessed: allGuessed,
       scores: room.players.map(p => ({
         name: p.name,
         score: p.score
       }))
     });
+    
+    // ✅ إعادة تعيين timestamps للجولة القادمة
+    room.guessTimestamps = {};
 
     room.currentRound++;
     room.currentDrawer++;
@@ -411,7 +521,7 @@ io.on('connection', (socket) => {
             score: p.score
           }));
         
-        console.log('🏁 انتهت لعبة الرسم في الغرفة', roomId, '- النتائج:', results);
+        console.log('🏁 انتهت لعبة الرسم في الغرفة', roomId);
 
         io.to(roomId).emit('game-finished', {
           results: results,
@@ -424,165 +534,142 @@ io.on('connection', (socket) => {
 
   // ============= Events عامة =============
 
-socket.on('join-room', ({ roomId, playerName }) => {
-  const room = rooms.get(roomId);
-  
-  if (!room) {
-    socket.emit('error', 'الغرفة غير موجودة');
-    return;
-  }
-
-  // ✅ التحقق إذا كان هذا الـ socket نفسه انضم من قبل
-  if (socket.roomId === roomId && socket.playerName === playerName) {
-    console.log(`⚠️ ${playerName} محاولة انضمام مكررة من نفس الـ socket - تم تجاهله`);
-    return;
-  }
-
-  let player = room.players.find(p => p.name === playerName);
-  let isRejoining = false;
-  
-  if (player) {
-    if (player.id && player.id !== socket.id) {
-      const timeSinceLastUpdate = Date.now() - (player.lastUpdateTime || 0);
-      
-      if (timeSinceLastUpdate > 5000) {
-        isRejoining = true;
-        
-        const oldId = player.id;
-        console.log(`🔄 ${playerName} يعود للغرفة ${roomId}`);
-        console.log(`   📌 ID القديم: ${oldId}`);
-        console.log(`   📌 ID الجديد: ${socket.id}`);
-        console.log(`   ⏱️ مضى ${Math.round(timeSinceLastUpdate / 1000)} ثانية`);
-        
-        if (player.disconnectTimeout) {
-          clearTimeout(player.disconnectTimeout);
-          delete player.disconnectTimeout;
-          console.log(`   ✅ تم إلغاء مؤقت المغادرة`);
-        }
-      } else {
-        // ✅ تحذير بسيط بدون إزعاج
-        // console.log(`⚪ ${playerName} انضمام سريع (${Math.round(timeSinceLastUpdate)}ms)`);
-        return;
-      }
-    } else if (!player.id) {
-      console.log(`✅ ${playerName} حصل على ID: ${socket.id}`);
-    } else {
-      // ✅ نفس الـ ID - تحديث بسيط
-      player.lastUpdateTime = Date.now();
+  socket.on('join-room', ({ roomId, playerName }) => {
+    const room = rooms.get(roomId);
+    
+    if (!room) {
+      socket.emit('error', 'الغرفة غير موجودة');
       return;
     }
+
+    if (socket.roomId === roomId && socket.playerName === playerName) {
+      console.log(`⚠️ ${playerName} محاولة انضمام مكررة - تجاهل`);
+      return;
+    }
+
+    let player = room.players.find(p => p.name === playerName);
+    let isRejoining = false;
     
-    player.id = socket.id;
-    player.lastUpdateTime = Date.now();
-  } else {
-    player = {
-      id: socket.id,
-      name: playerName,
-      score: 0,
-      answers: [],
-      remainingGuesses: 5,
-      lastUpdateTime: Date.now()
-    };
-    room.players.push(player);
-    console.log(`➕ ${playerName} انضم كلاعب جديد للغرفة ${roomId}`);
-  }
-
-  socket.join(roomId);
-  socket.roomId = roomId;
-  socket.playerName = playerName;
-
-  io.to(roomId).emit('room-update', {
-    players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
-    status: room.status,
-    gameType: room.gameType
-  });
-
-  if (isRejoining) {
-    socket.to(roomId).emit('player-rejoined', {
-      playerName: playerName,
-      message: `${playerName} عاد للعبة`
-    });
-    console.log(`   📢 تم إرسال إشعار العودة لباقي اللاعبين`);
-  }
-
-  io.to(socket.id).emit('scores-update', {
-    scores: room.players.map(p => ({
-      name: p.name,
-      score: p.score || 0
-    }))
-  })
-
-  // ✅ إعادة اللاعب لحالة اللعبة (فقط إذا كانت اللعبة playing)
-  if (room.status === 'playing') {
-    if (room.gameType === 'drawing') {
-      const drawer = room.players[room.currentDrawer];
-      
-      if (drawer) {
-        const timeElapsed = Math.floor((Date.now() - room.roundStartTime) / 1000);
-        const timeLeft = Math.max(0, 60 - timeElapsed);
-
-        if (room.canvasDrawings && room.canvasDrawings.length > 0) {
-          io.to(socket.id).emit('restore-canvas', {
-            drawings: room.canvasDrawings
-          });
-          console.log(`   🎨 تم إرسال ${room.canvasDrawings.length} رسمة محفوظة`);
-        }
-
-        setTimeout(() => {
-          if (drawer.name === playerName) {
-            const word = room.drawingWords[room.currentDrawer];
-            io.to(socket.id).emit('your-turn-to-draw', {
-              word: word,
-              round: room.currentRound + 1,
-              totalRounds: room.players.length,
-              timeLeft: timeLeft,
-              isRejoining: true
-            });
-            console.log(`   🎨 ${playerName} عاد وهو الرسام - الكلمة: ${word} - الوقت المتبقي: ${timeLeft}ث`);
-          } else {
-            io.to(socket.id).emit('someone-drawing', {
-              drawerName: drawer.name,
-              round: room.currentRound + 1,
-              totalRounds: room.players.length,
-              timeLeft: timeLeft,
-              isRejoining: true
-            });
-            console.log(`   👀 ${playerName} عاد كمشاهد - الرسام: ${drawer.name} - الوقت المتبقي: ${timeLeft}ث`);
+    if (player) {
+      if (player.id && player.id !== socket.id) {
+        const timeSinceLastUpdate = Date.now() - (player.lastUpdateTime || 0);
+        
+        if (timeSinceLastUpdate > 5000) {
+          isRejoining = true;
+          
+          console.log(`🔄 ${playerName} يعود للغرفة ${roomId}`);
+          
+          if (player.disconnectTimeout) {
+            clearTimeout(player.disconnectTimeout);
+            delete player.disconnectTimeout;
           }
-        }, 100);
-
-        io.to(socket.id).emit('guesses-update', {
-          remainingGuesses: player.remainingGuesses || 5
-        });
-      }
-    } else if (room.gameType === 'categories') {
-      if (room.currentCategory < categoryInfo.length) {
-        const category = categoryInfo[room.currentCategory];
-        
-        const timeElapsed = Math.floor((Date.now() - room.categoryStartTime) / 1000);
-        const categoryDuration = category.duration;
-        const timeLeft = Math.max(0, categoryDuration - timeElapsed);
-        
-        const response = {
-          category: category,
-          categoryNumber: room.currentCategory + 1,
-          totalCategories: categoryInfo.length,
-          startTime: room.categoryStartTime,
-          timeLeft: timeLeft
-        };
-        
-        if (category.id === 'math' && room.currentMathQuestion) {
-          response.mathQuestion = room.currentMathQuestion;
+        } else {
+          return;
         }
+      }
+      
+      player.id = socket.id;
+      player.lastUpdateTime = Date.now();
+    } else {
+      player = {
+        id: socket.id,
+        name: playerName,
+        score: 0,
+        answers: [],
+        remainingGuesses: 5,
+        lastUpdateTime: Date.now()
+      };
+      room.players.push(player);
+      console.log(`➕ ${playerName} انضم للغرفة ${roomId}`);
+    }
+
+    socket.join(roomId);
+    socket.roomId = roomId;
+    socket.playerName = playerName;
+
+    io.to(roomId).emit('room-update', {
+      players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+      status: room.status,
+      gameType: room.gameType
+    });
+
+    if (isRejoining) {
+      socket.to(roomId).emit('player-rejoined', {
+        playerName: playerName
+      });
+    }
+
+    io.to(socket.id).emit('scores-update', {
+      scores: room.players.map(p => ({
+        name: p.name,
+        score: p.score || 0
+      }))
+    });
+
+    // ✅ إعادة اللاعب لحالة اللعبة مع مزامنة الوقت
+    if (room.status === 'playing') {
+      if (room.gameType === 'drawing') {
+        const drawer = room.players[room.currentDrawer];
         
-        io.to(socket.id).emit('category-started', response);
-        console.log(`   📚 ${playerName} عاد للفئة: ${category.name} - الوقت المتبقي: ${timeLeft}ث`);
+        if (drawer && room.roundStartTime) {
+          const timeLeft = calculateTimeLeft(room.roundStartTime, 60);
+
+          if (room.canvasDrawings && room.canvasDrawings.length > 0) {
+            io.to(socket.id).emit('restore-canvas', {
+              drawings: room.canvasDrawings
+            });
+          }
+
+          setTimeout(() => {
+            if (drawer.name === playerName) {
+              const word = room.drawingWords[room.currentDrawer];
+              io.to(socket.id).emit('your-turn-to-draw', {
+                word: word,
+                round: room.currentRound + 1,
+                totalRounds: room.players.length,
+                timeLeft: timeLeft,
+                serverTime: Date.now(),
+                isRejoining: true
+              });
+            } else {
+              io.to(socket.id).emit('someone-drawing', {
+                drawerName: drawer.name,
+                round: room.currentRound + 1,
+                totalRounds: room.players.length,
+                timeLeft: timeLeft,
+                serverTime: Date.now(),
+                isRejoining: true
+              });
+            }
+          }, 100);
+
+          io.to(socket.id).emit('guesses-update', {
+            remainingGuesses: player.remainingGuesses || 5
+          });
+        }
+      } else if (room.gameType === 'categories') {
+        if (room.currentCategory < categoryInfo.length && room.categoryStartTime) {
+          const category = categoryInfo[room.currentCategory];
+          const timeLeft = calculateTimeLeft(room.categoryStartTime, category.duration);
+          
+          const response = {
+            category: category,
+            categoryNumber: room.currentCategory + 1,
+            totalCategories: categoryInfo.length,
+            startTime: room.categoryStartTime,
+            timeLeft: timeLeft,
+            serverTime: Date.now()
+          };
+          
+          if (category.id === 'math' && room.currentMathQuestion) {
+            response.mathQuestion = room.currentMathQuestion;
+          }
+          
+          io.to(socket.id).emit('category-started', response);
+        }
       }
     }
-  }
-
-  console.log(`✅ ${playerName} ${isRejoining ? 'عاد بنجاح' : 'في الغرفة'} ${roomId}`);
-});
+  });
 
   socket.on('get-scores', ({ roomId }) => {
     const room = rooms.get(roomId);
@@ -596,19 +683,21 @@ socket.on('join-room', ({ roomId, playerName }) => {
     }
   });
 
-  
-
-  // ============= Events لعبة الفئات =============
-
   socket.on('request-category', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (room && room.status === 'playing' && room.gameType === 'categories' && room.currentCategory < categoryInfo.length) {
       const category = categoryInfo[room.currentCategory];
+      const timeLeft = room.categoryStartTime ? 
+                       calculateTimeLeft(room.categoryStartTime, category.duration) : 
+                       category.duration;
+      
       const response = {
         category: category,
         categoryNumber: room.currentCategory + 1,
         totalCategories: categoryInfo.length,
-        startTime: room.categoryStartTime
+        startTime: room.categoryStartTime,
+        timeLeft: timeLeft,
+        serverTime: Date.now()
       };
       
       if (category.id === 'math' && room.currentMathQuestion) {
@@ -628,7 +717,7 @@ socket.on('join-room', ({ roomId, playerName }) => {
     room.status = 'playing';
     room.startTime = Date.now();
 
-    console.log(`🎮 بدء اللعبة في الغرفة ${roomId} - نوع اللعبة: ${room.gameType}`);
+    console.log(`🎮 بدء اللعبة في الغرفة ${roomId}`);
 
     if (room.gameType === 'drawing') {
       room.wordMode = wordMode || 'player';
@@ -637,44 +726,36 @@ socket.on('join-room', ({ roomId, playerName }) => {
       room.drawingWords = [];
 
       if (room.wordMode === 'random') {
-  const usedWords = new Set();
-  
-  for (let i = 0; i < room.players.length; i++) {
-    let word;
-    do {
-      word = randomWords[Math.floor(Math.random() * randomWords.length)];
-    } while (usedWords.has(word));
-    
-    usedWords.add(word);
-    room.drawingWords.push(word);
-  }
-  
-  console.log('🎲 تم اختيار كلمات عشوائية:', room.drawingWords);
-  console.log('⏱️ بدء العد التنازلي للكلمات العشوائية...');
-
-  let countdown = 3;
-  const countdownInterval = setInterval(() => {
-    io.to(roomId).emit('countdown', countdown);
-    console.log(`⏱️ العد التنازلي: ${countdown}`);
-    countdown--;
-
-    if (countdown < 0) {
-      clearInterval(countdownInterval);
-      console.log('🎮 بدء جولة الرسم الآن!');
-      setTimeout(() => {
-        startDrawingRound(roomId);
-      }, 500);
-    }
-  }, 1000);
-} else if (room.wordMode === 'player') {
-        console.log(`📝 إرسال طلب الكلمات لـ ${room.players.length} لاعبين`);
+        const usedWords = new Set();
         
+        for (let i = 0; i < room.players.length; i++) {
+          let word;
+          do {
+            word = randomWords[Math.floor(Math.random() * randomWords.length)];
+          } while (usedWords.has(word));
+          
+          usedWords.add(word);
+          room.drawingWords.push(word);
+        }
+        
+        console.log('🎲 كلمات عشوائية:', room.drawingWords);
+
+        let countdown = 3;
+        const countdownInterval = setInterval(() => {
+          io.to(roomId).emit('countdown', countdown);
+          countdown--;
+
+          if (countdown < 0) {
+            clearInterval(countdownInterval);
+            setTimeout(() => startDrawingRound(roomId), 500);
+          }
+        }, 1000);
+      } else if (room.wordMode === 'player') {
         io.to(roomId).emit('waiting-for-words', {
           message: 'كل لاعب يدخل كلمة',
           totalPlayers: room.players.length
         });
       }
-
     } else {
       room.currentCategory = 0;
       room.usedAnswers = [];
@@ -755,8 +836,6 @@ socket.on('join-room', ({ roomId, playerName }) => {
     }
   });
 
-  // ============= Events لعبة الرسم =============
-
   socket.on('change-word-mode', ({ roomId, wordMode }) => {
     const room = rooms.get(roomId);
     if (!room || room.gameType !== 'drawing') return;
@@ -764,7 +843,6 @@ socket.on('join-room', ({ roomId, playerName }) => {
     room.wordMode = wordMode;
     
     io.to(roomId).emit('word-mode-updated', { wordMode });
-    console.log(`🔄 تم تغيير نظام الكلمات في الغرفة ${roomId} إلى: ${wordMode}`);
   });
 
   socket.on('request-drawing-state', ({ roomId }) => {
@@ -772,19 +850,25 @@ socket.on('join-room', ({ roomId, playerName }) => {
     if (room && room.status === 'playing' && room.gameType === 'drawing') {
       const drawer = room.players[room.currentDrawer];
       
-      if (drawer) {
+      if (drawer && room.roundStartTime) {
+        const timeLeft = calculateTimeLeft(room.roundStartTime, 60);
+        
         if (drawer.id === socket.id) {
           const word = room.drawingWords[room.currentDrawer];
           io.to(socket.id).emit('your-turn-to-draw', {
             word: word,
             round: room.currentRound + 1,
-            totalRounds: room.players.length
+            totalRounds: room.players.length,
+            timeLeft: timeLeft,
+            serverTime: Date.now()
           });
         } else {
           io.to(socket.id).emit('someone-drawing', {
             drawerName: drawer.name,
             round: room.currentRound + 1,
-            totalRounds: room.players.length
+            totalRounds: room.players.length,
+            timeLeft: timeLeft,
+            serverTime: Date.now()
           });
         }
 
@@ -798,56 +882,115 @@ socket.on('join-room', ({ roomId, playerName }) => {
     }
   });
 
-socket.on('submit-word', ({ word }) => {
-  const roomId = socket.roomId;
-  const room = rooms.get(roomId);
-  
-  if (!room || room.gameType !== 'drawing') return;
+  socket.on('start-editing-word', () => {
+    const roomId = socket.roomId;
+    const room = rooms.get(roomId);
+    
+    if (!room || room.gameType !== 'drawing') return;
 
-  const player = room.players.find(p => p.id === socket.id);
-  if (!player) return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player) return;
 
-  room.drawingWords.push(word.trim());
+    // ✅ إلغاء حالة "جاهز"
+    if (room.playersReadyStatus && room.playersReadyStatus[player.name]) {
+      room.playersReadyStatus[player.name] = false;
+      console.log(`✏️ ${player.name} بدأ تعديل كلمته`);
+      
+      // ✅ حساب العداد الجديد
+      const readyCount = Object.keys(room.playersReadyStatus)
+        .filter(name => room.playersReadyStatus[name] === true).length;
+      const totalPlayers = room.players.length;
 
-  console.log(`📝 ${player.name} أدخل كلمة: "${word.trim()}" - المجموع: ${room.drawingWords.length}/${room.players.length}`);
+      // ✅ قائمة اللاعبين الجاهزين
+      const readyPlayers = room.players
+        .filter(p => room.playersReadyStatus[p.name] === true)
+        .map(p => ({ name: p.name }));
 
-  io.to(roomId).emit('words-update', {
-    wordsCount: room.drawingWords.length,
-    totalPlayers: room.players.length
+      // ✅ إشعار جميع اللاعبين
+      io.to(roomId).emit('player-editing-word', {
+        playerName: player.name,
+        message: `${player.name} يعدل كلمته...`
+      });
+
+      // ✅ إرسال تحديث العداد
+      io.to(roomId).emit('words-update', {
+        readyCount: readyCount,
+        totalPlayers: totalPlayers,
+        readyPlayers: readyPlayers,
+        allReady: false
+      });
+
+      console.log(`📊 العداد بعد التعديل: ${readyCount}/${totalPlayers}`);
+    }
   });
 
-  if (room.drawingWords.length === room.players.length) {
-    console.log('✅ جميع اللاعبين أدخلوا كلماتهم - بدء العد التنازلي!');
+  socket.on('submit-word', ({ word }) => {
+    const roomId = socket.roomId;
+    const room = rooms.get(roomId);
     
-    // ✅✅✅ عد تنازلي 3، 2، 1، 0
-    let countdown = 3;
-    const countdownInterval = setInterval(() => {
-      io.to(roomId).emit('countdown', countdown);
-      console.log(`⏱️ العد التنازلي: ${countdown}`);
-      countdown--;
+    if (!room || room.gameType !== 'drawing') return;
 
-      if (countdown < 0) {
-        clearInterval(countdownInterval);
-        console.log('🎮 بدء جولة الرسم الآن!');
-        setTimeout(() => {
-          startDrawingRound(roomId);
-        }, 500);
-      }
-    }, 1000);
-  }
-});
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player) return;
+
+    // ✅ تهيئة المصفوفات إذا لم تكن موجودة
+    if (!room.drawingWords) room.drawingWords = [];
+    if (!room.playersReadyStatus) room.playersReadyStatus = {};
+
+    const playerIndex = room.players.findIndex(p => p.id === socket.id);
+    
+    // ✅ تعيين الكلمة وتفعيل الجاهزية
+    room.drawingWords[playerIndex] = word.trim();
+    room.playersReadyStatus[player.name] = true;
+    
+    console.log(`✅ ${player.name} أرسل كلمة: "${word.trim()}"`);
+
+    // ✅ حساب عدد اللاعبين الجاهزين
+    const readyCount = Object.keys(room.playersReadyStatus)
+      .filter(name => room.playersReadyStatus[name] === true).length;
+    const totalPlayers = room.players.length;
+
+    // ✅ قائمة اللاعبين الجاهزين (للعرض في UI)
+    const readyPlayers = room.players
+      .filter(p => room.playersReadyStatus[p.name] === true)
+      .map(p => ({ name: p.name }));
+
+    // ✅ إرسال تحديث
+    io.to(roomId).emit('words-update', {
+      readyCount: readyCount,
+      totalPlayers: totalPlayers,
+      readyPlayers: readyPlayers,
+      allReady: readyCount === totalPlayers
+    });
+
+    console.log(`📊 العداد: ${readyCount}/${totalPlayers} - الجاهزون: ${readyPlayers.map(p => p.name).join(', ')}`);
+
+    // ✅ بدء اللعبة فقط إذا كل اللاعبين جاهزين
+    if (readyCount === totalPlayers) {
+      console.log('🎮 كل اللاعبين جاهزين - بدء العد التنازلي');
+      
+      let countdown = 3;
+      const countdownInterval = setInterval(() => {
+        io.to(roomId).emit('countdown', countdown);
+        countdown--;
+
+        if (countdown < 0) {
+          clearInterval(countdownInterval);
+          setTimeout(() => startDrawingRound(roomId), 500);
+        }
+      }, 1000);
+    }
+  });
 
   socket.on('draw', ({ roomId, drawData }) => {
     const room = rooms.get(roomId);
     if (!room) return;
 
-    // ✅ حفظ الرسمة في الغرفة
     if (!room.canvasDrawings) {
       room.canvasDrawings = [];
     }
     room.canvasDrawings.push(drawData);
 
-    // إرسال للآخرين
     socket.to(roomId).emit('drawing', drawData);
   });
 
@@ -855,9 +998,7 @@ socket.on('submit-word', ({ word }) => {
     const room = rooms.get(roomId);
     if (!room) return;
 
-    // ✅ مسح الرسومات المحفوظة
     room.canvasDrawings = [];
-
     socket.to(roomId).emit('canvas-cleared');
   });
 
@@ -866,6 +1007,15 @@ socket.on('submit-word', ({ word }) => {
     const room = rooms.get(roomId);
     
     if (!room || room.gameType !== 'drawing' || room.status !== 'playing') return;
+
+    // ✅ منع التخمينات إذا انتهت الجولة
+    if (room.roundActive === false) {
+      console.log(`⚠️ محاولة تخمين بعد انتهاء الجولة من ${socket.playerName}`);
+      io.to(socket.id).emit('round-already-ended', {
+        message: 'انتهت الجولة!'
+      });
+      return;
+    }
 
     const player = room.players.find(p => p.id === socket.id);
     if (!player) return;
@@ -888,21 +1038,40 @@ socket.on('submit-word', ({ word }) => {
 
     if (normalizedGuess === normalizedWord) {
       room.guessedPlayers.push(player.id);
-      player.score++;
-      drawer.score++;
-
-      console.log(`✅ ${player.name} خمّن الكلمة "${correctWord}" بشكل صحيح!`);
+      
+      // ✅ حساب الوقت المستغرق بالثواني
+      const currentTime = Date.now();
+      const timeElapsed = Math.floor((currentTime - room.roundStartTime) / 1000);
+      
+      // ✅ نظام النقاط الجديد: 100 - الوقت المستغرق (الحد الأدنى: 10)
+      const pointsEarned = Math.max(10, 100 - timeElapsed);
+      
+      player.score += pointsEarned;
+      
+      console.log(`✅ ${player.name} خمن بعد ${timeElapsed} ثانية وحصل على ${pointsEarned} نقطة`);
+      
+      // ✅ تسجيل وقت التخمين لحساب نقاط الرسام لاحقاً
+      if (!room.guessTimestamps) room.guessTimestamps = {};
+      room.guessTimestamps[player.id] = timeElapsed;
 
       io.to(roomId).emit('correct-guess', {
         playerName: player.name,
+        pointsEarned: pointsEarned,
+        timeElapsed: timeElapsed,
         scores: room.players.map(p => ({
           name: p.name,
           score: p.score
         }))
       });
 
-      if (room.guessedPlayers.length === room.players.length - 1) {
-        console.log('🎉 جميع اللاعبين خمّنوا الكلمة - إنهاء الجولة مبكراً');
+      // ✅ فحص: هل انتهت الجولة؟
+      const nonDrawerPlayers = room.players.filter(p => p.id !== drawer.id);
+      const playersStillPlaying = nonDrawerPlayers.filter(p => 
+        !room.guessedPlayers.includes(p.id) && p.remainingGuesses > 0
+      );
+      
+      if (playersStillPlaying.length === 0) {
+        console.log('✅ جميع اللاعبين خمنوا أو استنفذوا محاولاتهم - إنهاء الجولة');
         endDrawingRound(roomId);
       }
     } else {
@@ -917,32 +1086,50 @@ socket.on('submit-word', ({ word }) => {
       io.to(socket.id).emit('guesses-update', {
         remainingGuesses: player.remainingGuesses
       });
+
+      // ✅ فحص: هل كل اللاعبين (غير الرسام) إما خمنوا أو استنفذوا محاولاتهم؟
+      const nonDrawerPlayers = room.players.filter(p => p.id !== drawer.id);
+      const playersStillPlaying = nonDrawerPlayers.filter(p => 
+        !room.guessedPlayers.includes(p.id) && p.remainingGuesses > 0
+      );
+      
+      if (playersStillPlaying.length === 0) {
+        console.log('⚠️ كل اللاعبين إما خمنوا أو استنفذوا محاولاتهم - إنهاء الجولة');
+        endDrawingRound(roomId);
+      }
     }
   });
-
-  // ============= مغادرة اللاعب =============
 
   socket.on('player-leave', ({ roomId, playerName }) => {
     const room = rooms.get(roomId);
     if (!room) return;
 
-    console.log(`🚪 ${playerName} يغادر الغرفة ${roomId}`);
+    console.log(`🚪 ${playerName} يغادر الغرفة ${roomId} بشكل اختياري`);
 
-    // ✅ التحقق إذا اللاعب هو الهوست
+    // ✅ البحث عن اللاعب وإلغاء أي timeout
+    const player = room.players.find(p => p.name === playerName);
+    if (player && player.disconnectTimeout) {
+      clearTimeout(player.disconnectTimeout);
+      delete player.disconnectTimeout;
+    }
+
     const wasHost = room.hostName === playerName;
 
-    room.players = room.players.filter(p => p.id !== socket.id);
+    // ✅ حذف اللاعب فوراً
+    room.players = room.players.filter(p => p.name !== playerName);
+
+    console.log(`✅ تم حذف ${playerName} فوراً - باقي ${room.players.length} لاعبين`);
 
     if (room.players.length === 0) {
       if (room.roundTimer) {
         clearTimeout(room.roundTimer);
       }
       rooms.delete(roomId);
-      console.log(`🗑️ تم حذف الغرفة ${roomId} - لا يوجد لاعبين`);
+      console.log(`🗑️ تم حذف الغرفة ${roomId}`);
       return;
     }
 
-    // ✅ نقل الهوست إذا كان المغادر هو الهوست
+    // ✅ نقل الهوست المحسّن
     if (wasHost) {
       if (transferHost(room)) {
         io.to(roomId).emit('host-changed', {
@@ -952,36 +1139,328 @@ socket.on('submit-word', ({ word }) => {
       }
     }
 
+    // ✅ إشعار باقي اللاعبين بالمغادرة
+    io.to(roomId).emit('player-left', {
+      playerName: playerName,
+      remainingPlayers: room.players.length
+    });
+
+    // ✅ تحديث قائمة اللاعبين
     io.to(roomId).emit('room-update', {
       players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
       status: room.status,
       gameType: room.gameType
     });
 
-    io.to(roomId).emit('player-left', {
-      playerName: playerName,
-      remainingPlayers: room.players.length
-    });
-
-    if (room.status === 'playing') {
-      if (room.gameType === 'drawing') {
-        const drawer = room.players[room.currentDrawer];
-        if (!drawer) {
-          console.log('🔄 الرسام غادر - إنهاء الجولة');
-          endDrawingRound(roomId);
-        }
+    // ✅ إذا كان في لعبة الرسم، تحقق من الرسام
+    if (room.status === 'playing' && room.gameType === 'drawing') {
+      const drawer = room.players[room.currentDrawer];
+      if (!drawer) {
+        console.log('⚠️ الرسام غادر - إنهاء الجولة');
+        endDrawingRound(roomId);
       }
     }
   });
 
+  socket.on('player-ready', ({ roomId, playerName, gameType, action }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
 
-  // ============= إعادة اللعبة (من صفحة النتائج) =============
+    if (room.status !== 'finished') return;
 
-    // ✅ Handler لطلب حالة الغرفة يدوياً
+    if (action === 'leave') {
+      console.log(`🚪 ${playerName} يغادر من صفحة النتائج - الغرفة ${roomId}`);
+      
+      // ✅ البحث عن اللاعب وإلغاء أي timeout
+      const player = room.players.find(p => p.name === playerName);
+      if (player && player.disconnectTimeout) {
+        clearTimeout(player.disconnectTimeout);
+        delete player.disconnectTimeout;
+      }
+      
+      const wasHost = room.hostName === playerName;
+      
+      // ✅ حذف اللاعب فوراً
+      room.players = room.players.filter(p => p.name !== playerName);
+      
+      console.log(`✅ تم حذف ${playerName} فوراً - باقي ${room.players.length} لاعبين`);
+      
+      if (room.players.length === 0) {
+        rooms.delete(roomId);
+        console.log(`🗑️ تم حذف الغرفة ${roomId}`);
+        return;
+      }
+
+      // ✅ نقل الهوست المحسّن
+      if (wasHost) {
+        if (transferHost(room)) {
+          io.to(roomId).emit('host-changed', {
+            newHost: room.hostName
+          });
+        }
+      }
+
+      // ✅ إشعار باقي اللاعبين
+      io.to(roomId).emit('player-left', {
+        playerName: playerName,
+        remainingPlayers: room.players.length
+      });
+
+      return;
+    }
+
+    if (playerName === room.hostName && gameType) {
+      room.nextGameType = gameType;
+    }
+
+    if (!room.playersReady) {
+      room.playersReady = [];
+    }
+
+    if (!room.playersReady.includes(playerName)) {
+      room.playersReady.push(playerName);
+    }
+
+    io.to(roomId).emit('players-ready-update', {
+      playersReady: room.playersReady,
+      hostGameChoice: room.nextGameType,
+      totalPlayers: room.players.length
+    });
+
+    if (room.playersReady.length === room.players.length && room.nextGameType) {
+      // ✅ الهوست يبقى كما هو (أول لاعب في القائمة)
+      const currentHost = room.players.length > 0 ? room.players[0].name : room.hostName;
+
+      room.status = 'waiting';
+      room.gameType = room.nextGameType;
+      room.playersReady = [];
+      room.nextGameType = null;
+      
+      // ✅ تحديث وقت إنشاء الغرفة لمنع الحذف التلقائي
+      room.createdAt = Date.now();
+      console.log(`🔄 تحديث وقت الغرفة ${roomId} لمنع الحذف التلقائي`);
+
+      room.players.forEach(p => {
+        p.score = 0;
+        p.answers = [];
+        p.remainingGuesses = 5;
+      });
+
+      if (room.gameType === 'drawing') {
+        room.drawingWords = [];
+        room.currentRound = 0;
+        room.currentDrawer = 0;
+        room.guessedPlayers = [];
+        room.wordMode = 'player';
+        room.canvasDrawings = [];
+        room.submittedPlayers = []; // ✅ مسح قائمة اللاعبين المرسلين
+        room.playersReadyStatus = {}; // ✅ مسح حالات الجاهزية
+      } else {
+        room.currentCategory = 0;
+        room.usedAnswers = [];
+      }
+
+      // ✅ تعيين الهوست بناءً على أول لاعب في القائمة
+      room.hostName = currentHost;
+      console.log(`👑 الهوست الحالي: ${room.hostName}`);
+
+      io.to(roomId).emit('room-update', {
+        players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+        status: room.status,
+        gameType: room.gameType
+      });
+
+      io.to(roomId).emit('game-restarting', {
+        roomId: roomId,
+        gameType: room.gameType,
+        hostName: room.hostName
+      });
+    }
+  });
+
+  // ✅ المغادرة الاختيارية الفورية (بدون انتظار 30 ثانية)
+  socket.on('leave-room', ({ roomId, playerName: leavingPlayerName }) => {
+    const targetRoomId = roomId || socket.roomId;
+    const room = rooms.get(targetRoomId);
+    
+    if (!room) {
+      console.log('❌ leave-room: الغرفة غير موجودة:' , targetRoomId);
+      return;
+    }
+
+    const player = room.players.find(p => p.name === leavingPlayerName);
+    
+    if (player) {
+      console.log(`🚪 ${leavingPlayerName} يغادر الغرفة ${targetRoomId} بشكل اختياري`);
+      
+      // ✅ إلغاء أي timeout للانقطاع إذا كان موجوداً
+      if (player.disconnectTimeout) {
+        clearTimeout(player.disconnectTimeout);
+        delete player.disconnectTimeout;
+      }
+      
+      // ✅ التحقق من كان اللاعب هو الهوست
+      const wasHost = room.hostName === leavingPlayerName;
+      
+      // ✅ حذف اللاعب فوراً من القائمة
+      room.players = room.players.filter(p => p.name !== leavingPlayerName);
+      
+      console.log(`✅ تم حذف ${leavingPlayerName} فوراً - باقي ${room.players.length} لاعبين`);
+      
+      // ✅ نقل الهوست إذا كان المغادر هو الهوست
+      if (wasHost && room.players.length > 0) {
+        if (transferHost(room)) {
+          io.to(targetRoomId).emit('host-changed', {
+            newHost: room.hostName
+          });
+          console.log(`👑 تم نقل الهوست إلى ${room.hostName}`);
+        }
+      }
+      
+      // ✅ إشعار باقي اللاعبين
+      io.to(targetRoomId).emit('player-left', {
+        playerName: leavingPlayerName,
+        remainingPlayers: room.players.length
+      });
+      
+      // ✅ تحديث قائمة اللاعبين
+      io.to(targetRoomId).emit('room-update', {
+        players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+        status: room.status,
+        gameType: room.gameType
+      });
+      
+      // ✅ حذف الغرفة إذا لم يتبق أحد
+      if (room.players.length === 0) {
+        if (room.roundTimer) {
+          clearTimeout(room.roundTimer);
+        }
+        rooms.delete(targetRoomId);
+        console.log(`🗑️ تم حذف الغرفة ${targetRoomId} (فارغة)`);
+      } else if (room.status === 'playing' && room.gameType === 'drawing') {
+        // ✅ إذا كان الرسام هو من غادر، ننهي الجولة
+        const drawer = room.players[room.currentDrawer];
+        if (!drawer) {
+          console.log('⚠️ الرسام غادر - إنهاء الجولة');
+          endDrawingRound(targetRoomId);
+        }
+      }
+    } else {
+      console.log('⚠️ اللاعب غير موجود في الغرفة:' , leavingPlayerName);
+    }
+  });
+
+  // ✅ طرد لاعب (للهوست فقط)
+  socket.on('kick-player', ({ roomId, playerName: kickPlayerName }) => {
+    // ✅ استخدام socket.roomId إذا لم يتم إرسال roomId
+    const targetRoomId = roomId || socket.roomId;
+    const room = rooms.get(targetRoomId);
+    
+    if (!room) {
+      console.log('❌ kick-player: الغرفة غير موجودة:', targetRoomId);
+      return;
+    }
+
+    const requester = room.players.find(p => p.id === socket.id);
+    if (!requester || requester.name !== room.hostName) {
+      console.log('⚠️ محاولة طرد من غير الهوست:', requester?.name, 'vs', room.hostName);
+      return;
+    }
+
+    console.log(`👢 ${room.hostName} يطرد ${kickPlayerName} من الغرفة ${targetRoomId}`);
+
+    // حذف اللاعب من القائمة
+    const kickedPlayer = room.players.find(p => p.name === kickPlayerName);
+    if (kickedPlayer) {
+      room.players = room.players.filter(p => p.name !== kickPlayerName);
+
+      // إشعار اللاعب المطرود
+      if (kickedPlayer.id) {
+        io.to(kickedPlayer.id).emit('kicked', {
+          message: 'تم طردك من الغرفة'
+        });
+      }
+
+      // تحديث باقي اللاعبين
+      io.to(targetRoomId).emit('room-update', {
+        players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+        status: room.status,
+        gameType: room.gameType
+      });
+
+      io.to(targetRoomId).emit('player-left', {
+        playerName: kickPlayerName,
+        remainingPlayers: room.players.length
+      });
+
+      console.log(`✅ تم طرد ${kickPlayerName} - باقي ${room.players.length} لاعبين`);
+    } else {
+      console.log('❌ اللاعب المطلوب طرده غير موجود:', kickPlayerName);
+    }
+  });
+
+  // ✅ تغيير نوع اللعبة (للهوست فقط)
+  socket.on('change-game-type', ({ roomId, gameType: newGameType }) => {
+    // ✅ استخدام socket.roomId إذا لم يتم إرسال roomId
+    const targetRoomId = roomId || socket.roomId;
+    const room = rooms.get(targetRoomId);
+    
+    if (!room) {
+      console.log('❌ change-game-type: الغرفة غير موجودة:', targetRoomId);
+      return;
+    }
+
+    const requester = room.players.find(p => p.id === socket.id);
+    if (!requester || requester.name !== room.hostName) {
+      console.log('⚠️ محاولة تغيير اللعبة من غير الهوست:', requester?.name, 'vs', room.hostName);
+      return;
+    }
+
+    if (room.status !== 'waiting') {
+      console.log('⚠️ لا يمكن تغيير نوع اللعبة أثناء اللعب');
+      io.to(socket.id).emit('error', 'لا يمكن تغيير نوع اللعبة أثناء اللعب');
+      return;
+    }
+
+    console.log(`🎮 ${room.hostName} يغير نوع اللعبة من ${room.gameType} إلى ${newGameType} في الغرفة ${targetRoomId}`);
+
+    const oldGameType = room.gameType;
+    room.gameType = newGameType;
+
+    // إعادة تعيين البيانات حسب نوع اللعبة
+    if (newGameType === 'drawing') {
+      room.drawingWords = [];
+      room.currentRound = 0;
+      room.currentDrawer = 0;
+      room.guessedPlayers = [];
+      room.wordMode = room.wordMode || 'player';
+      room.canvasDrawings = [];
+      room.playersReadyStatus = {};
+    } else {
+      room.currentCategory = 0;
+      room.usedAnswers = [];
+    }
+
+    // إشعار جميع اللاعبين
+    io.to(targetRoomId).emit('room-update', {
+      players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+      status: room.status,
+      gameType: room.gameType,
+      wordMode: room.wordMode
+    });
+
+    io.to(targetRoomId).emit('game-type-changed', {
+      gameType: newGameType,
+      oldGameType: oldGameType,
+      message: `تم تغيير اللعبة إلى ${newGameType === 'drawing' ? 'لعبة الرسم' : 'لعبة الفئات'}`
+    });
+
+    console.log(`✅ تم تغيير نوع اللعبة من ${oldGameType} إلى ${newGameType}`);
+  });
+
   socket.on('get-room-state', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (room) {
-      console.log(`📤 إرسال room-state للغرفة ${roomId}`);
       io.to(socket.id).emit('room-update', {
         players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
         status: room.status,
@@ -990,114 +1469,6 @@ socket.on('submit-word', ({ word }) => {
       });
     }
   });
-
-socket.on('player-ready', ({ roomId, playerName, gameType, action }) => {
-  const room = rooms.get(roomId);
-  if (!room) return;
-
-  if (room.status !== 'finished') return;
-
-  if (action === 'leave') {
-    console.log(`🚪 ${playerName} يغادر من صفحة النتائج`);
-    
-    const wasHost = room.hostName === playerName;
-    
-    room.players = room.players.filter(p => p.name !== playerName);
-    
-    if (room.players.length === 0) {
-      rooms.delete(roomId);
-      console.log(`🗑️ تم حذف الغرفة ${roomId}`);
-      return;
-    }
-
-    if (wasHost) {
-      if (transferHost(room)) {
-        io.to(roomId).emit('host-changed', {
-          newHost: room.hostName,
-          message: `${room.hostName} أصبح المضيف الجديد`
-        });
-      }
-    }
-
-    io.to(roomId).emit('player-left', {
-      playerName: playerName,
-      remainingPlayers: room.players.length
-    });
-
-    return;
-  }
-
-  if (playerName === room.hostName && gameType) {
-    room.nextGameType = gameType;
-    console.log(`👑 المضيف ${playerName} اختار اللعبة التالية: ${gameType}`);
-  }
-
-  if (!room.playersReady) {
-    room.playersReady = [];
-  }
-
-  if (!room.playersReady.includes(playerName)) {
-    room.playersReady.push(playerName);
-    console.log(`✓ ${playerName} مستعد - (${room.playersReady.length}/${room.players.length})`);
-  }
-
-  io.to(roomId).emit('players-ready-update', {
-    playersReady: room.playersReady,
-    hostGameChoice: room.nextGameType,
-    totalPlayers: room.players.length
-  });
-
-if (room.playersReady.length === room.players.length && room.nextGameType) {
-  console.log('🎮 جميع اللاعبين جاهزين - إعادة تشغيل اللعبة');
-
-  const originalHost = room.hostName;
-  console.log(`💾 حفظ الهوست الأصلي: ${originalHost}`);
-
-  room.status = 'waiting';
-  room.gameType = room.nextGameType;
-  room.playersReady = [];
-  room.nextGameType = null;
-
-  room.players.forEach(p => {
-    p.score = 0;
-    p.answers = [];
-    p.remainingGuesses = 5;
-  });
-
-  if (room.gameType === 'drawing') {
-    room.drawingWords = [];
-    room.currentRound = 0;
-    room.currentDrawer = 0;
-    room.guessedPlayers = [];
-    room.wordMode = 'player';
-    room.canvasDrawings = [];
-  } else {
-    room.currentCategory = 0;
-    room.usedAnswers = [];
-  }
-
-  room.hostName = originalHost;
-  console.log(`✅ تم استعادة الهوست: ${room.hostName}`);
-
-  // ✅✅✅ إرسال room-update أولاً (مهم جداً!)
-  console.log('📡 إرسال room-update مع قائمة اللاعبين');
-  io.to(roomId).emit('room-update', {
-    players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
-    status: room.status,
-    gameType: room.gameType
-  });
-
-  // ✅ ثم إرسال game-restarting
-  console.log('📡 إرسال game-restarting');
-  io.to(roomId).emit('game-restarting', {
-    roomId: roomId,
-    gameType: room.gameType,
-    hostName: room.hostName
-  });
-}
-});
-
-  // ============= قطع الاتصال =============
 
   socket.on('disconnect', () => {
     console.log('🔴 لاعب قطع الاتصال:', socket.id);
@@ -1111,11 +1482,8 @@ if (room.playersReady.length === room.players.length && room.nextGameType) {
         const player = room.players.find(p => p.id === socket.id);
         
         if (player) {
-          console.log(`🔌 ${playerName} انقطع من الغرفة ${roomId} - في انتظار العودة...`);
-          
           socket.to(roomId).emit('player-disconnected', {
-            playerName: playerName,
-            message: `${playerName} انقطع اتصاله`
+            playerName: playerName
           });
           
           const disconnectTimeout = setTimeout(() => {
@@ -1127,26 +1495,23 @@ if (room.playersReady.length === room.players.length && room.nextGameType) {
             );
             
             if (stillDisconnected) {
-              // ✅ التحقق إذا كان الهوست
               const wasHost = currentRoom.hostName === playerName;
               
               currentRoom.players = currentRoom.players.filter(p => p.name !== playerName);
               
-              console.log(`❌ ${playerName} لم يعد خلال 30 ثانية - تم إزالته نهائياً`);
+              console.log(`❌ ${playerName} لم يعد خلال 30 ثانية`);
               
-              // ✅ نقل الهوست إذا لزم الأمر
+              // ✅ نقل الهوست المحسّن
               if (wasHost && currentRoom.players.length > 0) {
                 if (transferHost(currentRoom)) {
                   io.to(roomId).emit('host-changed', {
-                    newHost: currentRoom.hostName,
-                    message: `${currentRoom.hostName} أصبح المضيف الجديد`
+                    newHost: currentRoom.hostName
                   });
                 }
               }
               
               io.to(roomId).emit('player-left-permanently', {
                 playerName: playerName,
-                message: `${playerName} غادر اللعبة`,
                 remainingPlayers: currentRoom.players.length
               });
               
@@ -1155,7 +1520,6 @@ if (room.playersReady.length === room.players.length && room.nextGameType) {
                   clearTimeout(currentRoom.roundTimer);
                 }
                 rooms.delete(roomId);
-                console.log(`🗑️ تم حذف الغرفة ${roomId}`);
               } else {
                 io.to(roomId).emit('room-update', {
                   players: currentRoom.players.map(p => ({ name: p.name, score: p.score || 0 })),
@@ -1166,7 +1530,6 @@ if (room.playersReady.length === room.players.length && room.nextGameType) {
                 if (currentRoom.status === 'playing' && currentRoom.gameType === 'drawing') {
                   const drawer = currentRoom.players[currentRoom.currentDrawer];
                   if (!drawer) {
-                    console.log('🔄 الرسام غادر نهائياً - إنهاء الجولة');
                     endDrawingRound(roomId);
                   }
                 }
@@ -1183,8 +1546,7 @@ if (room.playersReady.length === room.players.length && room.nextGameType) {
       }
     }
   });
-
-}); // ✅ إغلاق io.on('connection')
+});
 
 // ================ Helper Functions ================
 
@@ -1219,8 +1581,6 @@ setInterval(() => {
     }
   }
 }, 600000);
-
-// ================ Start Server ================
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

@@ -81,8 +81,12 @@ function Results() {
       playerName,
       action: 'leave'
     });
-    socketService.disconnect();
-    navigate('/');
+    
+    // ✅ الانتظار قليلاً للسماح بإرسال الحدث ثم قطع الاتصال
+    setTimeout(() => {
+      socketService.disconnect();
+      navigate('/');
+    }, 100);
   };
 
   if (!results) {

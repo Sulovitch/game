@@ -3,12 +3,14 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import socketService from '../services/socket';
 
 function GameCategories() {
-    
   const location = useLocation();
   const navigate = useNavigate();
   const { roomId, playerName } = location.state || {};
   const [isNavigating, setIsNavigating] = useState(false);
   const [notifications, setNotifications] = useState([]);
+
+  // ✅ منع تسجيل listeners متعددة
+  const hasSetupSocketRef = useRef(false);
 
   const [currentCategory, setCurrentCategory] = useState(null);
   const [timeLeft, setTimeLeft] = useState(10);
@@ -24,10 +26,10 @@ function GameCategories() {
   const inputRef = useRef(null);
   const timerRef = useRef(null);
 
-const showFeedback = (message, type) => {
-  setFeedbackMessage({ message, type });
-  setTimeout(() => setFeedbackMessage(null), 2000);
-};
+  const showFeedback = (message, type) => {
+    setFeedbackMessage({ message, type });
+    setTimeout(() => setFeedbackMessage(null), 2000);
+  };
 
   useEffect(() => {
     if (!gameEnded) {
@@ -44,19 +46,26 @@ const showFeedback = (message, type) => {
     }
   }, [gameEnded]);
 
+  // ✅ Socket Events - مع منع التسجيل المتعدد
   useEffect(() => {
     if (!roomId || !playerName) {
       navigate('/');
       return;
     }
 
+    // ✅ منع تسجيل listeners متعددة
+    if (hasSetupSocketRef.current) {
+      console.log('⚠️ Socket listeners مسجلة بالفعل - تجاهل');
+      return;
+    }
+
+    hasSetupSocketRef.current = true;
+    console.log('✅ تسجيل Socket listeners للمرة الأولى');
+
     const socket = socketService.connect();
-    
     socketService.setRoomInfo(roomId, playerName);
 
-    socket.emit('join-room', { roomId, playerName });
-    socket.emit('get-scores', { roomId });
-    socket.emit('request-category', { roomId });
+    // ============= Socket Event Handlers =============
 
     const handleReconnect = () => {
       console.log('🔄 إعادة الاتصال - الانضمام للغرفة مرة أخرى');
@@ -65,9 +74,7 @@ const showFeedback = (message, type) => {
       socket.emit('request-category', { roomId });
     };
 
-    socket.on('connect', handleReconnect);
-
-    socket.on('player-rejoined', (data) => {
+    const handlePlayerRejoined = (data) => {
       setNotifications(prev => [...prev, {
         id: Date.now(),
         type: 'success',
@@ -77,9 +84,9 @@ const showFeedback = (message, type) => {
       setTimeout(() => {
         setNotifications(prev => prev.filter(n => n.id !== Date.now()));
       }, 3000);
-    });
+    };
 
-    socket.on('player-disconnected', (data) => {
+    const handlePlayerDisconnected = (data) => {
       setNotifications(prev => [...prev, {
         id: Date.now(),
         type: 'warning',
@@ -89,9 +96,27 @@ const showFeedback = (message, type) => {
       setTimeout(() => {
         setNotifications(prev => prev.slice(0, -1));
       }, 3000);
-    });
+    };
 
-    socket.on('player-left-permanently', (data) => {
+    const handlePlayerLeft = (data) => {
+      console.log('🚪 لاعب غادر:', data);
+      
+      // ✅ تحديث قائمة النقاط لحذف اللاعب
+      setScores(prev => prev.filter(p => p.name !== data.playerName));
+      
+      // ✅ إظهار إشعار
+      setNotifications(prev => [...prev, {
+        id: Date.now(),
+        type: 'error',
+        message: `🚪 ${data.playerName} غادر اللعبة`
+      }]);
+      
+      setTimeout(() => {
+        setNotifications(prev => prev.slice(0, -1));
+      }, 3000);
+    };
+
+    const handlePlayerLeftPermanently = (data) => {
       setNotifications(prev => [...prev, {
         id: Date.now(),
         type: 'error',
@@ -101,9 +126,9 @@ const showFeedback = (message, type) => {
       setTimeout(() => {
         setNotifications(prev => prev.slice(0, -1));
       }, 3000);
-    });
+    };
 
-    socket.on('category-started', (data) => {
+    const handleCategoryStarted = (data) => {
       console.log('📚 بدء فئة:', data);
       
       setCurrentCategory(data.category);
@@ -137,42 +162,42 @@ const showFeedback = (message, type) => {
       }, 1000);
 
       setTimeout(() => inputRef.current?.focus(), 100);
-    });
+    };
 
-    socket.on('new-math-question', (data) => {
+    const handleNewMathQuestion = (data) => {
       setMathQuestion(data.mathQuestion);
-    });
+    };
 
-    socket.on('answer-result', (data) => {
-        setRecentAnswers(prev => [{
-            playerName: data.playerName,
-            answer: data.answer,
-            isCorrect: data.isCorrect,
-            isDuplicate: data.isDuplicate, // ✅
-            id: Date.now()
-        }, ...prev.slice(0, 4)]);
+    const handleAnswerResult = (data) => {
+      setRecentAnswers(prev => [{
+        playerName: data.playerName,
+        answer: data.answer,
+        isCorrect: data.isCorrect,
+        isDuplicate: data.isDuplicate,
+        id: Date.now()
+      }, ...prev.slice(0, 4)]);
 
-        if (data.playerName === playerName) {
-            if (data.isCorrect) {
-            showFeedback('✅ إجابة صحيحة! +1', 'success');
-            } else if (data.isDuplicate) {
-            showFeedback('⚠️ كلمة مكررة!', 'warning'); // ✅ رسالة مخصصة
-            } else {
-            showFeedback('❌ إجابة خاطئة', 'error');
-            }
+      if (data.playerName === playerName) {
+        if (data.isCorrect) {
+          showFeedback('✅ إجابة صحيحة! +1', 'success');
+        } else if (data.isDuplicate) {
+          showFeedback('⚠️ كلمة مكررة!', 'warning');
+        } else {
+          showFeedback('❌ إجابة خاطئة', 'error');
         }
-        });
+      }
+    };
 
-    socket.on('scores-update', (data) => {
+    const handleScoresUpdate = (data) => {
       console.log('📊 تحديث النقاط:', data.scores);
       setScores(data.scores.sort((a, b) => b.score - a.score));
-    });
+    };
 
-    socket.on('countdown', (count) => {
+    const handleCountdown = (count) => {
       console.log('عد تنازلي:', count);
-    });
+    };
 
-    socket.on('game-finished', (data) => {
+    const handleGameFinished = (data) => {
       if (isNavigating) return;
       
       setGameEnded(true);
@@ -193,20 +218,48 @@ const showFeedback = (message, type) => {
           replace: true
         });
       }, 100);
-    });
+    };
 
+    // ============= تسجيل جميع الـ listeners =============
+
+    socket.on('connect', handleReconnect);
+    socket.on('player-rejoined', handlePlayerRejoined);
+    socket.on('player-disconnected', handlePlayerDisconnected);
+    socket.on('player-left', handlePlayerLeft);
+    socket.on('player-left-permanently', handlePlayerLeftPermanently);
+    socket.on('category-started', handleCategoryStarted);
+    socket.on('new-math-question', handleNewMathQuestion);
+    socket.on('answer-result', handleAnswerResult);
+    socket.on('scores-update', handleScoresUpdate);
+    socket.on('countdown', handleCountdown);
+    socket.on('game-finished', handleGameFinished);
+
+    // ✅ الآن نرسل join-room بعد تسجيل الـ listeners
+    console.log(`📡 الانضمام للغرفة ${roomId} باسم ${playerName}`);
+    socket.emit('join-room', { roomId, playerName });
+    socket.emit('get-scores', { roomId });
+    socket.emit('request-category', { roomId });
+
+    // ============= Cleanup =============
     return () => {
+      console.log('🧹 تنظيف Socket listeners');
+      
       socket.off('connect', handleReconnect);
-      socket.off('player-rejoined');
-      socket.off('player-disconnected');
-      socket.off('player-left-permanently');
-      socket.off('category-started');
-      socket.off('new-math-question');
-      socket.off('answer-result');
-      socket.off('scores-update');
-      socket.off('countdown');
-      socket.off('game-finished');
+      socket.off('player-rejoined', handlePlayerRejoined);
+      socket.off('player-disconnected', handlePlayerDisconnected);
+      socket.off('player-left', handlePlayerLeft);
+      socket.off('player-left-permanently', handlePlayerLeftPermanently);
+      socket.off('category-started', handleCategoryStarted);
+      socket.off('new-math-question', handleNewMathQuestion);
+      socket.off('answer-result', handleAnswerResult);
+      socket.off('scores-update', handleScoresUpdate);
+      socket.off('countdown', handleCountdown);
+      socket.off('game-finished', handleGameFinished);
+      
       if (timerRef.current) clearInterval(timerRef.current);
+      
+      // ✅ إعادة تعيين flag عند unmount
+      hasSetupSocketRef.current = false;
     };
   }, [roomId, playerName, navigate, isNavigating]);
 
@@ -223,18 +276,23 @@ const showFeedback = (message, type) => {
     setGameEnded(true);
     setShowLeaveConfirm(false);
     
-    socketService.emit('player-leave', { roomId, playerName });
-    socketService.clearRoomInfo();
-    socketService.disconnect();
+    console.log('🚪 المغادرة من لعبة الفئات');
     
-    navigate('/');
+    // ✅ إرسال حدث المغادرة أولاً
+    socketService.emit('player-leave', { roomId, playerName });
+    
+    // ✅ الانتظار قليلاً للسماح بإرسال الحدث ثم قطع الاتصال
+    setTimeout(() => {
+      socketService.clearRoomInfo();
+      socketService.disconnect();
+      navigate('/');
+    }, 100);
   };
 
   const handleCancelLeave = () => {
     setShowLeaveConfirm(false);
   };
 
-  // ✅ return واحد فقط هنا
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4">
       
@@ -306,13 +364,13 @@ const showFeedback = (message, type) => {
       )}
 
       {/* Feedback Message */}
-        {feedbackMessage && (
+      {feedbackMessage && (
         <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-50 px-6 py-4 rounded-xl shadow-2xl font-bold text-lg animate-bounce ${
-            feedbackMessage.type === 'success' ? 'bg-green-500/90 backdrop-blur-sm text-white border border-green-400' :
-            feedbackMessage.type === 'warning' ? 'bg-orange-500/90 backdrop-blur-sm text-white border border-orange-400' : // ✅
-            'bg-red-500/90 backdrop-blur-sm text-white border border-red-400'
+          feedbackMessage.type === 'success' ? 'bg-green-500/90 backdrop-blur-sm text-white border border-green-400' :
+          feedbackMessage.type === 'warning' ? 'bg-orange-500/90 backdrop-blur-sm text-white border border-orange-400' :
+          'bg-red-500/90 backdrop-blur-sm text-white border border-red-400'
         }`}>
-            {feedbackMessage.message}
+          {feedbackMessage.message}
         </div>
       )}
 
@@ -436,35 +494,35 @@ const showFeedback = (message, type) => {
                   📢 آخر المحاولات
                 </h3>
                 <div className="space-y-2 max-h-48 overflow-y-auto scrollable">
-                    {recentAnswers.map((item) => (
-                        <div
-                        key={item.id}
-                        className={`p-3 rounded-lg flex items-center justify-between border ${
-                            item.isCorrect 
-                            ? 'bg-green-500/20 border-green-500/30' 
-                            : item.isDuplicate 
-                                ? 'bg-orange-500/20 border-orange-500/30' 
-                                : 'bg-red-500/20 border-red-500/30'
-                        }`}
-                        >
-                        <div className="flex items-center gap-2 flex-1">
-                            <span className="font-semibold text-purple-200 text-sm sm:text-base">
-                            👤 {item.playerName}:
-                            </span>
-                            {item.isCorrect ? (
-                            <span className="text-green-400 font-bold">✅</span>
-                            ) : item.isDuplicate ? (
-                            <span className="text-orange-300 text-sm sm:text-base">{item.answer}  مكررة ⚠️ </span>
-                            ) : (
-                            <span className="text-slate-300 text-sm sm:text-base">{item.answer} ❌</span>
-                            )}
-                        </div>
-                        {item.isCorrect && (
-                            <span className="text-green-400 font-bold text-sm">+1</span>
+                  {recentAnswers.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`p-3 rounded-lg flex items-center justify-between border ${
+                        item.isCorrect 
+                          ? 'bg-green-500/20 border-green-500/30' 
+                          : item.isDuplicate 
+                            ? 'bg-orange-500/20 border-orange-500/30' 
+                            : 'bg-red-500/20 border-red-500/30'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 flex-1">
+                        <span className="font-semibold text-purple-200 text-sm sm:text-base">
+                          👤 {item.playerName}:
+                        </span>
+                        {item.isCorrect ? (
+                          <span className="text-green-400 font-bold">✅</span>
+                        ) : item.isDuplicate ? (
+                          <span className="text-orange-300 text-sm sm:text-base">{item.answer} مكررة ⚠️</span>
+                        ) : (
+                          <span className="text-slate-300 text-sm sm:text-base">{item.answer} ❌</span>
                         )}
-                        </div>
-                    ))}
+                      </div>
+                      {item.isCorrect && (
+                        <span className="text-green-400 font-bold text-sm">+1</span>
+                      )}
                     </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>

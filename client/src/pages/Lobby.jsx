@@ -14,6 +14,11 @@ function Lobby() {
   const [wordMode, setWordMode] = useState('player');
   const [gameType, setGameType] = useState(initialGameType);
   const [isHost, setIsHost] = useState(initialIsHost);
+  const [showKickModal, setShowKickModal] = useState(false);
+  const [playerToKick, setPlayerToKick] = useState(null);
+  const [wasKicked, setWasKicked] = useState(false);
+  const [showDrawingTutorial, setShowDrawingTutorial] = useState(false); // ✅ شرح لعبة الرسم
+  const [showCategoriesTutorial, setShowCategoriesTutorial] = useState(false); // ✅ شرح لعبة الفئات
   
   const hasJoinedRef = useRef(false);
   const isReturningFromResults = useRef(location.state?.fromResults || false);
@@ -67,10 +72,17 @@ function Lobby() {
     console.log('📊 [room-update] استقبال تحديث الغرفة');
     console.log('   📋 عدد اللاعبين:', data.players?.length);
     console.log('   👥 اللاعبين:', data.players?.map(p => p.name).join(', '));
+    console.log('   🎮 نوع اللعبة:', data.gameType);
     
     if (data.players && data.players.length > 0) {
       setPlayers(data.players);
       setGameStatus(data.status);
+      
+      // ✅ تحديث نوع اللعبة
+      if (data.gameType) {
+        setGameType(data.gameType);
+      }
+      
       if (data.wordMode) {
         setWordMode(data.wordMode);
       }
@@ -130,6 +142,25 @@ function Lobby() {
     navigate('/');
   });
 
+  // ✅ listener للطرد
+  socket.on('kicked', (data) => {
+    console.log('👢 تم طردك من الغرفة:', data);
+    setWasKicked(true);
+    
+    // الانتظار 3 ثواني ثم الرجوع للصفحة الرئيسية
+    setTimeout(() => {
+      socketService.disconnect();
+      navigate('/');
+    }, 3000);
+  });
+
+  // ✅ listener لتغيير نوع اللعبة
+  socket.on('game-type-changed', (data) => {
+    console.log('🎮 تم تغيير نوع اللعبة:', data);
+    setGameType(data.gameType);
+    // تم إزالة alert لتجربة أفضل
+  });
+
   return () => {
     console.log('🧹 Cleanup - إزالة listeners');
     socket.off('room-update');
@@ -138,6 +169,8 @@ function Lobby() {
     socket.off('waiting-for-words');
     socket.off('countdown');
     socket.off('error');
+    socket.off('kicked');
+    socket.off('game-type-changed');
     hasJoinedRef.current = false;
   };
 }, [roomId, playerName, navigate, gameType]);
@@ -157,62 +190,335 @@ function Lobby() {
     socketService.emit('change-word-mode', { roomId, wordMode: mode });
   };
 
-  const copyRoomId = () => {
-    navigator.clipboard.writeText(roomId);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copyRoomId = async () => {
+    try {
+      // ✅ محاولة استخدام Clipboard API الحديث
+      await navigator.clipboard.writeText(roomId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      // ✅ fallback للمتصفحات القديمة
+      const textArea = document.createElement('textarea');
+      textArea.value = roomId;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-999999px';
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (e) {
+        console.error('فشل النسخ:', e);
+        alert('فشل نسخ الرمز. انسخه يدوياً: ' + roomId);
+      }
+      document.body.removeChild(textArea);
+    }
   };
 
+  // ✅ دالة المغادرة المحدثة - المغادرة الفورية
   const handleLeave = () => {
-    socketService.disconnect();
-    navigate('/');
+    console.log('🚪 اللاعب يغادر الغرفة بشكل اختياري');
+    // ✅ إرسال حدث المغادرة الاختيارية قبل قطع الاتصال
+    socketService.emit('leave-room', { roomId, playerName });
+    
+    // الانتظار قليلاً للسماح بإرسال الحدث ثم قطع الاتصال
+    setTimeout(() => {
+      socketService.disconnect();
+      navigate('/');
+    }, 100);
   };
 
-  // ✅ عرض حالة التحميل إذا لم نحصل على قائمة اللاعبين بعد
-  if (players.length === 0) {
+  // ✅ دالة طرد اللاعبين (للهوست فقط)
+  const handleKickPlayer = (kickPlayerName) => {
+    if (!isHost) return;
+    if (kickPlayerName === playerName) {
+      alert('لا يمكنك طرد نفسك!');
+      return;
+    }
+    
+    // ✅ فتح modal التأكيد
+    setPlayerToKick(kickPlayerName);
+    setShowKickModal(true);
+  };
+
+  // ✅ تأكيد الطرد
+  const confirmKick = () => {
+    if (playerToKick) {
+      console.log('👢 طرد اللاعب:', playerToKick);
+      socketService.emit('kick-player', { 
+        roomId, 
+        playerName: playerToKick 
+      });
+    }
+    setShowKickModal(false);
+    setPlayerToKick(null);
+  };
+
+  // ✅ إلغاء الطرد
+  const cancelKick = () => {
+    setShowKickModal(false);
+    setPlayerToKick(null);
+  };
+
+  // ✅ تغيير نوع اللعبة
+  const handleChangeGameType = (newGameType) => {
+    if (!isHost) {
+      alert('فقط المضيف يمكنه تغيير نوع اللعبة');
+      return;
+    }
+    
+    if (gameStatus !== 'waiting') {
+      alert('لا يمكن تغيير نوع اللعبة أثناء اللعب');
+      return;
+    }
+
+    console.log('🎮 طلب تغيير نوع اللعبة إلى:', newGameType);
+    socketService.emit('change-game-type', { roomId, gameType: newGameType });
+  };
+
+  if (countdown !== null) {
     return (
-      <div className="min-h-screen w-full bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="text-white text-2xl">⏳ جاري التحميل...</div>
+      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="text-9xl font-bold text-white mb-4 animate-bounce">
+            {countdown}
+          </div>
+          <div className="text-2xl text-purple-200">
+            {countdown > 0 ? 'استعد...' : 'ابدأ!'}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ✅ نافذة الطرد
+  if (wasKicked) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-red-900 via-purple-900 to-pink-900 flex items-center justify-center p-4">
+        <div className="bg-slate-800/90 backdrop-blur-sm rounded-3xl p-8 max-w-md w-full text-center border-2 border-red-500/50 shadow-2xl">
+          <div className="text-6xl mb-4">👢</div>
+          <h2 className="text-2xl font-bold text-white mb-2">تم طردك من الغرفة</h2>
+          <p className="text-red-300 mb-4">المضيف قام بإخراجك من اللعبة</p>
+          <p className="text-slate-400 text-sm">سيتم توجيهك للصفحة الرئيسية...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl">
-        
-        {/* العد التنازلي */}
-        {countdown !== null && (
-          <div className="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50">
-            <div className="text-white text-6xl sm:text-9xl font-bold animate-pulse">
-              {countdown === 0 ? 'ابدأ! 🚀' : countdown}
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center p-4">
+      
+      {/* نافذة شرح لعبة الرسم */}
+      {showDrawingTutorial && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-gradient-to-br from-purple-900/95 to-indigo-900/95 backdrop-blur-xl rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl border-2 border-purple-500/50 my-4">
+            <div className="text-center mb-6">
+              <div className="text-5xl sm:text-6xl mb-4">🎨</div>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">
+                لعبة الرسم
+              </h2>
+              <p className="text-purple-300 text-sm sm:text-base">
+                ارسم وخمن واكسب النقاط!
+              </p>
+            </div>
+            
+            <div className="space-y-4 text-right">
+              {/* قواعد اللعبة */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 border border-purple-400/30">
+                <h3 className="text-xl font-bold text-yellow-400 mb-3 flex items-center gap-2">
+                  <span>📜</span>
+                  <span>قواعد اللعبة:</span>
+                </h3>
+                <div className="space-y-2 text-white text-sm sm:text-base">
+                  <p>• كل لاعب يرسم مرة واحدة</p>
+                  <p>• الرسام يرسم الكلمة اللي تظهر له</p>
+                  <p>• اللاعبون الآخرون يحاولون تخمين الكلمة</p>
+                  <p>• لديك 60 ثانية لكل جولة</p>
+                  <p>• لديك 5 محاولات للتخمين</p>
+                </div>
+              </div>
+
+              {/* نظام النقاط للخامنين */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 border border-purple-400/30">
+                <h3 className="text-xl font-bold text-green-400 mb-3 flex items-center gap-2">
+                  <span>🎯</span>
+                  <span>نقاط التخمين:</span>
+                </h3>
+                <div className="space-y-2 text-white text-sm sm:text-base">
+                  <p className="flex items-start gap-2">
+                    <span className="text-green-400 text-xl">⚡</span>
+                    <span><strong className="text-green-300">نقاطك = 100 - الوقت المستغرق</strong></span>
+                  </p>
+                  <div className="mr-7 space-y-1 text-purple-200">
+                    <p>• خمنت بعد 5 ثواني؟ <strong className="text-green-300">95 نقطة</strong> 🔥</p>
+                    <p>• خمنت بعد 30 ثانية؟ <strong className="text-blue-300">70 نقطة</strong> ✨</p>
+                    <p>• خمنت بعد 50 ثانية؟ <strong className="text-orange-300">50 نقطة</strong> 😐</p>
+                  </div>
+                  <p className="mr-7 text-yellow-200">
+                    💡 <strong>كلما خمنت أسرع، نقاط أكثر!</strong>
+                  </p>
+                </div>
+              </div>
+
+              {/* نظام النقاط للرسام */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 border border-purple-400/30">
+                <h3 className="text-xl font-bold text-pink-400 mb-3 flex items-center gap-2">
+                  <span>🎨</span>
+                  <span>نقاط الرسم:</span>
+                </h3>
+                <div className="space-y-2 text-white text-sm sm:text-base">
+                  <p className="flex items-start gap-2">
+                    <span className="text-pink-400 text-xl">🏆</span>
+                    <span><strong className="text-pink-300">نقاطك = (عدد اللاعبين اللي خمنوا × 25) + مكافأة</strong></span>
+                  </p>
+                  <div className="mr-7 space-y-1 text-purple-200">
+                    <p>• كل اللاعبين خمنوا؟ <strong className="text-green-300">+50 نقطة إضافية!</strong> 🎉</p>
+                    <p>• 3 لاعبين خمنوا: <strong className="text-blue-300">75 نقطة</strong></p>
+                    <p>• ما أحد خمن؟ <strong className="text-red-300">0 نقطة</strong> 💀</p>
+                  </div>
+                  <p className="mr-7 text-yellow-200">
+                    💡 <strong>ارسم واضح عشان الكل يخمن!</strong>
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="mt-6">
+              <button
+                onClick={() => setShowDrawingTutorial(false)}
+                className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white px-6 py-4 rounded-xl font-bold shadow-lg text-base sm:text-lg transition-all duration-300 hover:scale-105 active:scale-95"
+              >
+                ✅ فهمت!
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* البطاقة الرئيسية */}
-        <div className="bg-slate-800/50 backdrop-blur-xl rounded-3xl shadow-2xl border border-purple-500/20 p-6 sm:p-8">
-          
-          {/* العنوان */}
-          <div className="text-center mb-6 sm:mb-8">
-            <div className="text-5xl sm:text-6xl mb-3">
-              {gameType === 'drawing' ? '🎨' : '⚡'}
+      {/* نافذة شرح لعبة الفئات */}
+      {showCategoriesTutorial && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-gradient-to-br from-blue-900/95 to-cyan-900/95 backdrop-blur-xl rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl border-2 border-blue-500/50 my-4">
+            <div className="text-center mb-6">
+              <div className="text-5xl sm:text-6xl mb-4">⚡</div>
+              <h2 className="text-2xl sm:text-3xl font-bold text-white mb-2">
+                لعبة الفئات
+              </h2>
+              <p className="text-blue-300 text-sm sm:text-base">
+                أجب بسرعة واكسب النقاط!
+              </p>
             </div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">
-              {gameType === 'drawing' ? 'غرفة الرسم' : 'غرفة الانتظار'}
+            
+            <div className="space-y-4 text-right">
+              {/* قواعد اللعبة */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 border border-blue-400/30">
+                <h3 className="text-xl font-bold text-yellow-400 mb-3 flex items-center gap-2">
+                  <span>📜</span>
+                  <span>قواعد اللعبة:</span>
+                </h3>
+                <div className="space-y-2 text-white text-sm sm:text-base">
+                  <p>• تظهر لك فئة (مثل: بلاد، حيوانات، ألوان)</p>
+                  <p>• اكتب أكبر عدد من الإجابات الصحيحة</p>
+                  <p>• لديك 20 ثانية لكل فئة</p>
+                  
+                </div>
+              </div>
+
+              {/* نظام النقاط */}
+              <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 border border-blue-400/30">
+                <h3 className="text-xl font-bold text-green-400 mb-3 flex items-center gap-2">
+                  <span>🎯</span>
+                  <span>نظام النقاط:</span>
+                </h3>
+                <div className="space-y-2 text-white text-sm sm:text-base">
+                  <p className="flex items-start gap-2">
+                    <span className="text-green-400 text-xl">✅</span>
+                    <span><strong className="text-green-300">كل إجابة صحيحة = نقطة</strong></span>
+                  </p>
+                  <div className="mr-7 space-y-1 text-blue-200">
+                    
+                    <p>❌ إجابة خاطئة: <strong className="text-red-300">0 نقاط</strong></p>
+                    <p>⚠️ إجابة مكررة: <strong className="text-orange-300">0 نقاط</strong></p>
+                  </div>
+                  <p className="mr-7 text-yellow-200">
+                    💡 <strong>فكر بسرعة واكتب إجابات متنوعة!</strong>
+                  </p>
+                </div>
+              </div>
+
+              {/* نصائح */}
+              <div className="bg-gradient-to-r from-yellow-600/20 to-orange-600/20 rounded-2xl p-4 border border-yellow-500/30">
+                <h3 className="text-lg font-bold text-yellow-300 mb-2 flex items-center gap-2">
+                  <span>💡</span>
+                  <span>نصائح:</span>
+                </h3>
+                <div className="space-y-1 text-yellow-200 text-sm">
+                  <p>• اكتب إجابات مختلفة لكل جولة</p>
+                  <p>• لا تضيع وقتك على إجابة واحدة</p>
+                  <p>• الكمية أهم من الكيفية!</p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="mt-6">
+              <button
+                onClick={() => setShowCategoriesTutorial(false)}
+                className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white px-6 py-4 rounded-xl font-bold shadow-lg text-base sm:text-lg transition-all duration-300 hover:scale-105 active:scale-95"
+              >
+                ✅ فهمت!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* ✅ Modal تأكيد الطرد */}
+      {showKickModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-2xl p-6 max-w-sm w-full border-2 border-red-500/50 shadow-2xl">
+            <div className="text-center mb-4">
+              <div className="text-5xl mb-3">⚠️</div>
+              <h3 className="text-xl font-bold text-white mb-2">تأكيد الطرد</h3>
+              <p className="text-slate-300">
+                هل أنت متأكد من طرد <span className="font-bold text-red-400">{playerToKick}</span>؟
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={confirmKick}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 rounded-xl font-bold transition-all"
+              >
+                👢 طرد
+              </button>
+              <button
+                onClick={cancelKick}
+                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-3 rounded-xl font-bold transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="w-full max-w-2xl">
+        <div className="bg-slate-800/90 backdrop-blur-sm rounded-3xl p-6 sm:p-8 shadow-2xl border border-purple-500/20">
+          {/* العنوان */}
+          <div className="text-center mb-6">
+            <h1 className="text-3xl sm:text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 mb-2">
+              🎮 غرفة الانتظار
             </h1>
-            <p className="text-purple-300 text-sm sm:text-base">
-              في انتظار اللاعبين للبدء
-            </p>
+            <p className="text-purple-300 text-sm sm:text-base">في انتظار بدء اللعبة...</p>
           </div>
 
           {/* رمز الغرفة */}
-          <div className="mb-6 p-4 sm:p-6 bg-gradient-to-r from-purple-600/20 to-pink-600/20 rounded-2xl border border-purple-500/30">
-            <p className="text-purple-300 text-sm sm:text-base mb-3 text-center font-semibold">
-              📋 رمز الغرفة
-            </p>
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-3">
-              <span className="text-3xl sm:text-4xl font-bold text-white tracking-wider">
+          <div className="mb-6 p-4 sm:p-6 bg-gradient-to-r from-purple-900/50 to-pink-900/50 rounded-2xl border border-purple-500/30">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 mb-2">
+              <span className="text-slate-300 font-semibold text-sm sm:text-base whitespace-nowrap">
+                رمز الغرفة:
+              </span>
+              <span className="text-2xl sm:text-3xl font-bold text-white tracking-wider bg-slate-900/50 px-4 sm:px-6 py-2 rounded-xl border border-purple-500/30">
                 {roomId}
               </span>
               <button
@@ -261,6 +567,18 @@ function Lobby() {
                       </div>
                     </div>
                   </div>
+                  
+                  {/* ✅ زر الطرد - يظهر للهوست فقط */}
+                  {isHost && player.name !== playerName && (
+                    <button
+                      onClick={() => handleKickPlayer(player.name)}
+                      className="bg-red-600/20 hover:bg-red-600/40 border border-red-500/50 text-red-300 px-3 py-1.5 rounded-lg transition-all text-xs font-semibold shrink-0 ml-2"
+                      title="طرد اللاعب"
+                    >
+                      👢 طرد
+                    </button>
+                  )}
+                  
                   <div className="text-green-400 text-xl shrink-0 ml-2">●</div>
                 </div>
               ))}
@@ -278,6 +596,62 @@ function Lobby() {
               ))}
             </div>
           </div>
+
+          {/* ✅ تغيير نوع اللعبة - للمضيف فقط */}
+          {isHost && (
+            <div className="mb-6">
+              <h3 className="text-white text-base sm:text-lg font-bold mb-3 text-center">
+                🎮 نوع اللعبة
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <button
+                    onClick={() => handleChangeGameType('drawing')}
+                    className={`w-full p-4 rounded-2xl border-2 transition-all ${
+                      gameType === 'drawing'
+                        ? 'bg-gradient-to-br from-pink-600 to-purple-700 text-white border-pink-400 shadow-lg scale-105'
+                        : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:border-pink-500/50'
+                    }`}
+                  >
+                    <div className="text-3xl mb-2">🎨</div>
+                    <div className="font-bold text-sm sm:text-base mb-1">لعبة الرسم</div>
+                    <div className="text-xs text-slate-400">
+                      ارسم وخمن
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setShowDrawingTutorial(true)}
+                    className="w-full mt-2 px-3 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 rounded-xl text-xs sm:text-sm font-semibold transition-all border border-purple-500/30"
+                  >
+                    ❓ كيف ألعب؟
+                  </button>
+                </div>
+                
+                <div>
+                  <button
+                    onClick={() => handleChangeGameType('categories')}
+                    className={`w-full p-4 rounded-2xl border-2 transition-all ${
+                      gameType === 'categories'
+                        ? 'bg-gradient-to-br from-blue-600 to-cyan-700 text-white border-blue-400 shadow-lg scale-105'
+                        : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:border-blue-500/50'
+                    }`}
+                  >
+                    <div className="text-3xl mb-2">⚡</div>
+                    <div className="font-bold text-sm sm:text-base mb-1">لعبة الفئات</div>
+                    <div className="text-xs text-slate-400">
+                      أجب على الأسئلة
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setShowCategoriesTutorial(true)}
+                    className="w-full mt-2 px-3 py-2 bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 rounded-xl text-xs sm:text-sm font-semibold transition-all border border-blue-500/30"
+                  >
+                    ❓ كيف ألعب؟
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ✅✅✅ خيار وضع الكلمات - للمضيف فقط في لعبة الرسم ✅✅✅ */}
           {isHost && gameType === 'drawing' && (

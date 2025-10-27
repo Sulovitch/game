@@ -1,0 +1,401 @@
+/* ================ Animations محسّنة ================ */
+
+/* Toast Animation */
+@keyframes slide-left {
+  from { 
+    opacity: 0; 
+    transform: translateX(100px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateX(0); 
+  }
+}
+
+.animate-slide-left {
+  animation: slide-left 0.3s ease-out;
+}
+
+/* Toast Progress Bar */
+@keyframes toast-progress {
+  from { 
+    width: 100%; 
+  }
+  to { 
+    width: 0%; 
+  }
+}
+
+.animate-toast-progress {
+  animation: toast-progress linear forwards;
+}
+
+/* Loading Bar Animation */
+@keyframes loading-bar {
+  0% { 
+    transform: translateX(-100%); 
+  }
+  50% { 
+    transform: translateX(0%); 
+  }
+  100% { 
+    transform: translateX(100%); 
+  }
+}
+
+.animate-loading-bar {
+  animation: loading-bar 1.5s ease-in-out infinite;
+}
+
+/* Shake Animation (للأخطاء) */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-10px); }
+  20%, 40%, 60%, 80% { transform: translateX(10px); }
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+/* Scale Pulse (للنقرات) */
+@keyframes scale-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+
+.animate-scale-pulse {
+  animation: scale-pulse 0.2s ease-in-out;
+}
+
+/* ✅ Scale Up (للـ modals) */
+@keyframes scale-up {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-up {
+  animation: scale-up 0.2s ease-out;
+}
+
+/* ✅ Kick Modal Progress Bar (للطرد) */
+@keyframes kick-progress {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.animate-kick-progress {
+  animation: kick-progress 3s linear forwards;
+}
+
+/* ✅ Kicked Shake Animation (اهتزاز أقوى للطرد) */
+@keyframes kicked-shake {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  10% { transform: translateX(-15px) rotate(-5deg); }
+  20% { transform: translateX(15px) rotate(5deg); }
+  30% { transform: translateX(-15px) rotate(-5deg); }
+  40% { transform: translateX(15px) rotate(5deg); }
+  50% { transform: translateX(-10px) rotate(-3deg); }
+  60% { transform: translateX(10px) rotate(3deg); }
+  70% { transform: translateX(-10px) rotate(-3deg); }
+  80% { transform: translateX(10px) rotate(3deg); }
+  90% { transform: translateX(-5px) rotate(-1deg); }
+}
+
+.animate-kicked-shake {
+  animation: kicked-shake 0.8s ease-in-out;
+}
+
+/* Confetti Animation (للفوز) */
+@keyframes confetti-fall {
+  0% { 
+    transform: translateY(-100vh) rotate(0deg);
+    opacity: 1;
+  }
+  100% { 
+    transform: translateY(100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+.animate-confetti {
+  animation: confetti-fall 3s ease-in-out infinite;
+}
+
+/* Wiggle Animation */
+@keyframes wiggle {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+
+.animate-wiggle {
+  animation: wiggle 0.5s ease-in-out infinite;
+}
+
+/* Glow Animation */
+@keyframes glow {
+  0%, 100% { 
+    box-shadow: 0 0 20px rgba(168, 85, 247, 0.4);
+  }
+  50% { 
+    box-shadow: 0 0 40px rgba(168, 85, 247, 0.8);
+  }
+}
+
+.animate-glow {
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* Typing Indicator */
+@keyframes typing {
+  0%, 60%, 100% { 
+    transform: translateY(0); 
+  }
+  30% { 
+    transform: translateY(-10px); 
+  }
+}
+
+.animate-typing {
+  animation: typing 1.4s ease-in-out infinite;
+}
+
+/* Skeleton Loading */
+@keyframes skeleton-loading {
+  0% { 
+    background-position: -200% 0; 
+  }
+  100% { 
+    background-position: 200% 0; 
+  }
+}
+
+.animate-skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(30, 41, 59, 0.3) 0%,
+    rgba(71, 85, 105, 0.5) 50%,
+    rgba(30, 41, 59, 0.3) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+}
+
+/* Heartbeat Animation */
+@keyframes heartbeat {
+  0%, 100% { 
+    transform: scale(1); 
+  }
+  10%, 30% { 
+    transform: scale(1.1); 
+  }
+  20%, 40% { 
+    transform: scale(1); 
+  }
+}
+
+.animate-heartbeat {
+  animation: heartbeat 1.5s ease-in-out infinite;
+}
+
+/* Slide In from Bottom */
+@keyframes slide-in-bottom {
+  from { 
+    opacity: 0; 
+    transform: translateY(50px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+.animate-slide-in-bottom {
+  animation: slide-in-bottom 0.4s ease-out;
+}
+
+/* Zoom In */
+@keyframes zoom-in {
+  from { 
+    opacity: 0; 
+    transform: scale(0.8); 
+  }
+  to { 
+    opacity: 1; 
+    transform: scale(1); 
+  }
+}
+
+.animate-zoom-in {
+  animation: zoom-in 0.3s ease-out;
+}
+
+/* Flip Animation */
+@keyframes flip {
+  0% { 
+    transform: perspective(400px) rotateY(0); 
+  }
+  100% { 
+    transform: perspective(400px) rotateY(360deg); 
+  }
+}
+
+.animate-flip {
+  animation: flip 0.6s ease-in-out;
+}
+
+/* Success Check Animation */
+@keyframes check-draw {
+  0% { 
+    stroke-dashoffset: 100; 
+  }
+  100% { 
+    stroke-dashoffset: 0; 
+  }
+}
+
+.animate-check {
+  stroke-dasharray: 100;
+  animation: check-draw 0.5s ease-out forwards;
+}
+
+/* Connection Pulse (للـ online/offline) */
+@keyframes connection-pulse {
+  0%, 100% { 
+    opacity: 1; 
+  }
+  50% { 
+    opacity: 0.5; 
+  }
+}
+
+.animate-connection-pulse {
+  animation: connection-pulse 2s ease-in-out infinite;
+}
+
+/* ================ Utility Classes ================ */
+
+/* Smooth Transitions */
+.transition-smooth {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.transition-bounce {
+  transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* Hover Effects */
+.hover-lift {
+  transition: transform 0.2s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-5px);
+}
+
+.hover-glow {
+  transition: box-shadow 0.3s ease;
+}
+
+.hover-glow:hover {
+  box-shadow: 0 0 30px rgba(168, 85, 247, 0.6);
+}
+
+/* Focus Ring محسّن */
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-slate-900;
+}
+
+/* Disabled State */
+.disabled-state {
+  @apply opacity-50 cursor-not-allowed pointer-events-none;
+}
+
+/* ================ Performance Optimizations ================ */
+
+/* GPU Acceleration */
+.gpu-accelerated {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Reduce Motion للمستخدمين الذين يفضلون تقليل الحركة */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ================ Dark Mode Support ================ */
+@media (prefers-color-scheme: light) {
+  /* يمكن إضافة styles للـ light mode إذا لزم الأمر */
+}
+
+/* ================ Print Styles محسّنة ================ */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  
+  .print-only {
+    display: block !important;
+  }
+  
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ================ Accessibility ================ */
+
+/* Focus Visible (للوصولية) */
+.focus-visible:focus-visible {
+  outline: 3px solid #8b5cf6;
+  outline-offset: 2px;
+}
+
+/* Screen Reader Only */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Skip to Content Link */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: #8b5cf6;
+  color: white;
+  padding: 8px;
+  text-decoration: none;
+  z-index: 100;
+}
+
+.skip-link:focus {
+  top: 0;
+}
