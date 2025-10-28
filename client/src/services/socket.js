@@ -35,16 +35,24 @@ class SocketService {
           
           const currentPath = window.location.pathname;
           const isInGame = currentPath === '/drawing-game' || currentPath === '/game-categories';
+          const isInLobby = currentPath === '/lobby';
           
-          if (this.roomId && this.playerName && isInGame) {
+          if (this.roomId && this.playerName && (isInGame || isInLobby)) {
             console.log(`🔄 إعادة الانضمام للغرفة ${this.roomId} تلقائياً`);
             
             setTimeout(() => {
+              // ✅ إعادة الانضمام للغرفة
               this.socket.emit('join-room', { 
                 roomId: this.roomId, 
                 playerName: this.playerName 
               });
               
+              // ✅ طلب room-update للوبي
+              if (isInLobby) {
+                this.socket.emit('get-room-state', { roomId: this.roomId });
+              }
+              
+              // ✅ طلب حالة اللعبة للألعاب
               if (currentPath === '/drawing-game') {
                 this.socket.emit('request-drawing-state', { roomId: this.roomId });
                 this.socket.emit('get-scores', { roomId: this.roomId });

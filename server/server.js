@@ -197,6 +197,7 @@ app.post('/api/game/create', (req, res) => {
     roomData.guessedPlayers = [];
     roomData.wordMode = 'player';
     roomData.canvasDrawings = [];
+    roomData.gameDrawings = []; // ✅ إضافة
   } else {
     roomData.currentCategory = 0;
     roomData.usedAnswers = [];
@@ -212,6 +213,69 @@ app.post('/api/game/create', (req, res) => {
     message: 'تم إنشاء الغرفة بنجاح' 
   });
 });
+
+// ================ 🧪 TEST ENDPOINTS - حذف هذا في الإنتاج ================
+app.post('/api/test/set-scores', (req, res) => {
+  const { roomId, scores } = req.body;
+  // scores format: [{ name: 'player1', score: 100 }, { name: 'player2', score: 100 }]
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'الغرفة غير موجودة' });
+  }
+
+  scores.forEach(scoreData => {
+    const player = room.players.find(p => p.name === scoreData.name);
+    if (player) {
+      player.score = scoreData.score;
+    }
+  });
+
+  io.to(roomId).emit('room-update', {
+    players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+    status: room.status,
+    gameType: room.gameType,
+      hostName: room.hostName
+  });
+
+  console.log('🧪 تم تعديل النقاط للاختبار:', scores);
+  
+  res.json({ 
+    success: true,
+    message: 'تم تعديل النقاط',
+    players: room.players.map(p => ({ name: p.name, score: p.score }))
+  });
+});
+
+app.post('/api/test/finish-game', (req, res) => {
+  const { roomId } = req.body;
+  
+  const room = rooms.get(roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'الغرفة غير موجودة' });
+  }
+
+  room.status = 'finished';
+  
+  const results = room.players
+    .sort((a, b) => b.score - a.score)
+    .map((p, index) => ({
+      rank: index + 1,
+      name: p.name,
+      score: p.score
+    }));
+
+  io.to(roomId).emit('game-finished', { results });
+
+  console.log('🧪 تم إنهاء اللعبة للاختبار');
+  
+  res.json({ 
+    success: true,
+    message: 'تم إنهاء اللعبة',
+    results
+  });
+});
+// ================ END TEST ENDPOINTS ================
 
 app.post('/api/game/join/:roomId', (req, res) => {
   const { roomId } = req.params;
@@ -363,6 +427,49 @@ io.on('connection', (socket) => {
         startCategory(roomId);
       }, 3000);
     } else {
+      // ✅ فحص التعادل عند نهاية الفئات
+      const sortedPlayers = [...room.players].sort((a, b) => b.score - a.score);
+      const topScore = sortedPlayers[0]?.score || 0;
+      const tiedPlayers = sortedPlayers.filter(p => p.score === topScore);
+      
+      // إذا كان هناك تعادل في المركز الأول
+      if (tiedPlayers.length > 1) {
+        // تهيئة عداد الفئات الإضافية إذا لم يكن موجوداً
+        if (!room.tiebreakCategories) {
+          room.tiebreakCategories = 0;
+        }
+        
+        // إذا لم نصل للحد الأقصى (3 فئات)
+        if (room.tiebreakCategories < 3) {
+          room.tiebreakCategories++;
+          console.log(`⚔️ تعادل اكتُشف! فئة إضافية ${room.tiebreakCategories}/3`);
+          console.log(`المتعادلون (${topScore} نقطة):`, tiedPlayers.map(p => p.name).join(', '));
+          
+          // إرسال إشعار بالفئة الإضافية
+          io.to(roomId).emit('tiebreak-category', {
+            tiedPlayers: tiedPlayers.map(p => ({ name: p.name, score: p.score })),
+            categoryNumber: room.tiebreakCategories,
+            maxCategories: 3,
+            message: `تعادل! فئة إضافية ${room.tiebreakCategories} من 3`
+          });
+          
+          // إعادة تعيين للفئة الإضافية
+          room.currentCategory = 0;
+          room.usedAnswers = [];
+          
+          // بدء فئة جديدة بعد 3 ثواني
+          setTimeout(() => {
+            startCategory(roomId);
+          }, 3000);
+          
+          return; // لا ننهي اللعبة
+        } else {
+          // وصلنا للحد الأقصى - ننهي اللعبة بالتعادل
+          console.log('⚔️ التعادل مستمر بعد 3 فئات إضافية - إنهاء اللعبة');
+        }
+      }
+      
+      // إنهاء اللعبة (إما لا يوجد تعادل أو وصلنا للحد الأقصى)
       room.status = 'finished';
       const results = room.players
         .sort((a, b) => b.score - a.score)
@@ -372,13 +479,28 @@ io.on('connection', (socket) => {
           score: p.score
         }));
       
+      // ✅ تحديد إذا كان هناك تعادل في المركز الأول
+      const finalTiedPlayers = results.filter(p => p.score === results[0].score);
+      const isTied = finalTiedPlayers.length > 1;
+      
       console.log('🏁 انتهت لعبة الفئات في الغرفة', roomId);
+      if (isTied) {
+        console.log('🤝 اللعبة انتهت بتعادل بين:', finalTiedPlayers.map(p => p.name).join(', '));
+      }
+
+      // ✅ حفظ النتائج في الغرفة
+      room.lastResults = results;
 
       io.to(roomId).emit('game-finished', {
         results: results,
         roomId: roomId,
-        hostName: room.hostName
+        hostName: room.hostName,
+        isTied: isTied,
+        tiedPlayers: isTied ? finalTiedPlayers : []
       });
+      
+      // إعادة تعيين عداد الفئات الإضافية
+      room.tiebreakCategories = 0;
     }
   };
 
@@ -465,13 +587,29 @@ io.on('connection', (socket) => {
     // ✅ تعيين الجولة كمنتهية لمنع قبول تخمينات إضافية
     room.roundActive = false;
 
+    // ✅ حفظ الرسمة قبل إنهاء الجولة
+    if (!room.gameDrawings) {
+      room.gameDrawings = [];
+    }
+
+    const word = room.drawingWords[room.currentDrawer];
+    const drawer = room.players[room.currentDrawer];
+
+    if (drawer && word && room.canvasDrawings && room.canvasDrawings.length > 0) {
+      room.gameDrawings.push({
+        drawerName: drawer.name,
+        word: word,
+        drawings: [...room.canvasDrawings],
+        round: room.currentRound + 1
+      });
+      console.log(`💾 حفظ رسمة ${drawer.name} - الكلمة: ${word}`);
+    }
+
     if (room.roundTimer) {
       clearTimeout(room.roundTimer);
       room.roundTimer = null;
     }
 
-    const word = room.drawingWords[room.currentDrawer];
-    const drawer = room.players[room.currentDrawer];
     
     // ✅ حساب نقاط الرسام
     const totalPlayers = room.players.length - 1; // عدد اللاعبين غير الرسام
@@ -512,6 +650,51 @@ io.on('connection', (socket) => {
       if (room.currentRound < room.players.length) {
         startDrawingRound(roomId);
       } else {
+        // ✅ فحص التعادل عند نهاية الجولات العادية
+        const sortedPlayers = [...room.players].sort((a, b) => b.score - a.score);
+        const topScore = sortedPlayers[0]?.score || 0;
+        const tiedPlayers = sortedPlayers.filter(p => p.score === topScore);
+        
+        // إذا كان هناك تعادل في المركز الأول
+        if (tiedPlayers.length > 1) {
+          // تهيئة عداد الجولات الإضافية إذا لم يكن موجوداً
+          if (!room.tiebreakRounds) {
+            room.tiebreakRounds = 0;
+          }
+          
+          // إذا لم نصل للحد الأقصى (3 جولات)
+          if (room.tiebreakRounds < 3) {
+            room.tiebreakRounds++;
+            console.log(`⚔️ تعادل اكتُشف! جولة إضافية ${room.tiebreakRounds}/3`);
+            console.log(`المتعادلون (${topScore} نقطة):`, tiedPlayers.map(p => p.name).join(', '));
+            
+            // إرسال إشعار بالجولة الإضافية
+            io.to(roomId).emit('tiebreak-round', {
+              tiedPlayers: tiedPlayers.map(p => ({ name: p.name, score: p.score })),
+              roundNumber: room.tiebreakRounds,
+              maxRounds: 3,
+              message: `تعادل! جولة إضافية ${room.tiebreakRounds} من 3`
+            });
+            
+            // إعادة تعيين للجولة الإضافية
+            room.currentRound = 0;
+            room.currentDrawer = 0;
+            room.guessedPlayers = [];
+            room.canvasDrawings = [];
+            
+            // بدء جولة جديدة بعد 5 ثواني
+            setTimeout(() => {
+              startDrawingRound(roomId);
+            }, 5000);
+            
+            return; // لا ننهي اللعبة
+          } else {
+            // وصلنا للحد الأقصى - ننهي اللعبة بالتعادل
+            console.log('⚔️ التعادل مستمر بعد 3 جولات إضافية - إنهاء اللعبة');
+          }
+        }
+        
+        // إنهاء اللعبة (إما لا يوجد تعادل أو وصلنا للحد الأقصى)
         room.status = 'finished';
         const results = room.players
           .sort((a, b) => b.score - a.score)
@@ -521,13 +704,28 @@ io.on('connection', (socket) => {
             score: p.score
           }));
         
+        // ✅ تحديد إذا كان هناك تعادل في المركز الأول
+        const finalTiedPlayers = results.filter(p => p.score === results[0].score);
+        const isTied = finalTiedPlayers.length > 1;
+        
         console.log('🏁 انتهت لعبة الرسم في الغرفة', roomId);
+        if (isTied) {
+          console.log('🤝 اللعبة انتهت بتعادل بين:', finalTiedPlayers.map(p => p.name).join(', '));
+        }
+
+        // ✅ حفظ النتائج في الغرفة
+        room.lastResults = results;
 
         io.to(roomId).emit('game-finished', {
           results: results,
           roomId: roomId,
-          hostName: room.hostName
+          hostName: room.hostName,
+          isTied: isTied,
+          tiedPlayers: isTied ? finalTiedPlayers : []
         });
+        
+        // إعادة تعيين عداد الجولات الإضافية
+        room.tiebreakRounds = 0;
       }
     }, 5000);
   };
@@ -538,6 +736,7 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     
     if (!room) {
+      console.log(`❌ join-room: الغرفة ${roomId} غير موجودة`);
       socket.emit('error', 'الغرفة غير موجودة');
       return;
     }
@@ -583,6 +782,9 @@ io.on('connection', (socket) => {
       console.log(`➕ ${playerName} انضم للغرفة ${roomId}`);
     }
 
+    // ✅ تحديث وقت الغرفة عند انضمام لاعب
+    room.createdAt = Date.now();
+
     socket.join(roomId);
     socket.roomId = roomId;
     socket.playerName = playerName;
@@ -590,7 +792,9 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('room-update', {
       players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
       status: room.status,
-      gameType: room.gameType
+      gameType: room.gameType,
+      hostName: room.hostName,
+      lastResults: room.lastResults || null
     });
 
     if (isRejoining) {
@@ -1149,7 +1353,8 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('room-update', {
       players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
       status: room.status,
-      gameType: room.gameType
+      gameType: room.gameType,
+      hostName: room.hostName
     });
 
     // ✅ إذا كان في لعبة الرسم، تحقق من الرسام
@@ -1160,6 +1365,19 @@ io.on('connection', (socket) => {
         endDrawingRound(roomId);
       }
     }
+  });
+
+  // ✅ إضافة handler للحصول على الرسومات
+  socket.on('get-game-drawings', ({ roomId }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    console.log('🎨 طلب الرسومات للغرفة:', roomId);
+    
+    // إرسال الرسومات المحفوظة
+    io.to(socket.id).emit('game-drawings', {
+      drawings: room.gameDrawings || []
+    });
   });
 
   socket.on('player-ready', ({ roomId, playerName, gameType, action }) => {
@@ -1209,9 +1427,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    if (playerName === room.hostName && gameType) {
-      room.nextGameType = gameType;
-    }
+    // ✅ إزالة منطق اختيار اللعبة - اللعبة تبقى نفسها
 
     if (!room.playersReady) {
       room.playersReady = [];
@@ -1223,16 +1439,14 @@ io.on('connection', (socket) => {
 
     io.to(roomId).emit('players-ready-update', {
       playersReady: room.playersReady,
-      hostGameChoice: room.nextGameType,
       totalPlayers: room.players.length
     });
 
-    if (room.playersReady.length === room.players.length && room.nextGameType) {
-      // ✅ الهوست يبقى كما هو (أول لاعب في القائمة)
-      const currentHost = room.players.length > 0 ? room.players[0].name : room.hostName;
-
+    if (room.playersReady.length === room.players.length) {
+      // ✅ الهوست يبقى كما هو - لا يتغير
+      
       room.status = 'waiting';
-      room.gameType = room.nextGameType;
+      // ✅ نوع اللعبة يبقى كما هو - لا يتغير
       room.playersReady = [];
       room.nextGameType = null;
       
@@ -1248,6 +1462,7 @@ io.on('connection', (socket) => {
 
       if (room.gameType === 'drawing') {
         room.drawingWords = [];
+        room.gameDrawings = []; // ✅ إعادة تعيين الرسومات المحفوظة
         room.currentRound = 0;
         room.currentDrawer = 0;
         room.guessedPlayers = [];
@@ -1255,26 +1470,46 @@ io.on('connection', (socket) => {
         room.canvasDrawings = [];
         room.submittedPlayers = []; // ✅ مسح قائمة اللاعبين المرسلين
         room.playersReadyStatus = {}; // ✅ مسح حالات الجاهزية
+        room.tiebreakRounds = 0; // ✅ إعادة تعيين عداد الجولات الإضافية
       } else {
         room.currentCategory = 0;
         room.usedAnswers = [];
+        room.tiebreakCategories = 0; // ✅ إعادة تعيين عداد الفئات الإضافية
       }
 
-      // ✅ تعيين الهوست بناءً على أول لاعب في القائمة
-      room.hostName = currentHost;
-      console.log(`👑 الهوست الحالي: ${room.hostName}`);
+      console.log(`👑 الهوست الحالي: ${room.hostName} (لم يتغير)`);
 
+
+      // ✅ إرسال room-update أولاً
       io.to(roomId).emit('room-update', {
         players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
         status: room.status,
-        gameType: room.gameType
+        gameType: room.gameType,
+        wordMode: room.wordMode,
+        hostName: room.hostName,
+        lastResults: room.lastResults || null
       });
 
+      // ✅ ثم إرسال game-restarting
       io.to(roomId).emit('game-restarting', {
         roomId: roomId,
         gameType: room.gameType,
-        hostName: room.hostName
+        hostName: room.hostName,
+        lastResults: room.lastResults || null
       });
+
+      // ✅ إرسال room-update مرة أخرى بعد 500ms للتأكد من استقبال الجميع
+      setTimeout(() => {
+        io.to(roomId).emit('room-update', {
+          players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+          status: room.status,
+          gameType: room.gameType,
+          wordMode: room.wordMode,
+          hostName: room.hostName,
+          lastResults: room.lastResults || null
+        });
+        console.log('🔄 إرسال room-update إضافي للتأكد - اللاعبين:', room.players.length);
+      }, 500);
     }
   });
 
@@ -1327,7 +1562,8 @@ io.on('connection', (socket) => {
       io.to(targetRoomId).emit('room-update', {
         players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
         status: room.status,
-        gameType: room.gameType
+        gameType: room.gameType,
+      hostName: room.hostName
       });
       
       // ✅ حذف الغرفة إذا لم يتبق أحد
@@ -1385,7 +1621,8 @@ io.on('connection', (socket) => {
       io.to(targetRoomId).emit('room-update', {
         players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
         status: room.status,
-        gameType: room.gameType
+        gameType: room.gameType,
+      hostName: room.hostName
       });
 
       io.to(targetRoomId).emit('player-left', {
@@ -1465,10 +1702,52 @@ io.on('connection', (socket) => {
         players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
         status: room.status,
         gameType: room.gameType,
-        wordMode: room.wordMode
+        wordMode: room.wordMode,
+        hostName: room.hostName
       });
     }
   });
+
+  // ================ 🧪 TEST SOCKET EVENTS - حذف هذا في الإنتاج ================
+  socket.on('test-set-scores', ({ roomId, scores }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    scores.forEach(scoreData => {
+      const player = room.players.find(p => p.name === scoreData.name);
+      if (player) {
+        player.score = scoreData.score;
+      }
+    });
+
+    io.to(roomId).emit('room-update', {
+      players: room.players.map(p => ({ name: p.name, score: p.score || 0 })),
+      status: room.status,
+      gameType: room.gameType,
+      hostName: room.hostName
+    });
+
+    console.log('🧪 تم تعديل النقاط عبر Socket:', scores);
+  });
+
+  socket.on('test-finish-game', ({ roomId }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    room.status = 'finished';
+    
+    const results = room.players
+      .sort((a, b) => b.score - a.score)
+      .map((p, index) => ({
+        rank: index + 1,
+        name: p.name,
+        score: p.score
+      }));
+
+    io.to(roomId).emit('game-finished', { results });
+    console.log('🧪 تم إنهاء اللعبة عبر Socket');
+  });
+  // ================ END TEST SOCKET EVENTS ================
 
   socket.on('disconnect', () => {
     console.log('🔴 لاعب قطع الاتصال:', socket.id);
@@ -1569,18 +1848,57 @@ function generateRoomId() {
 }
 
 // تنظيف الغرف القديمة كل 10 دقائق
+// ✅ تنظيف الغرف الذكي - كل 3 دقائق
 setInterval(() => {
   const now = Date.now();
+  let deletedCount = 0;
+  
   for (const [roomId, room] of rooms.entries()) {
-    if (now - room.createdAt > 600000) {
-      if (room.roundTimer) {
-        clearTimeout(room.roundTimer);
-      }
+    const inactiveTime = now - room.createdAt;
+    const hasPlayers = room.players && room.players.length > 0;
+    const connectedPlayers = room.players?.filter(p => p.id !== null) || [];
+    const hasConnectedPlayers = connectedPlayers.length > 0;
+    
+    // 1️⃣ حذف الغرف الفارغة تماماً بعد 3 دقائق
+    if (!hasPlayers && inactiveTime > 180000) {
+      if (room.roundTimer) clearTimeout(room.roundTimer);
       rooms.delete(roomId);
-      console.log(`🗑️ تم حذف الغرفة القديمة ${roomId}`);
+      deletedCount++;
+      console.log(`🗑️ حذف غرفة فارغة ${roomId} (مرت 3 دقائق)`);
+      continue;
+    }
+    
+    // 2️⃣ حذف الغرف المنقطعة (كل اللاعبين offline) بعد 10 دقائق
+    if (hasPlayers && !hasConnectedPlayers && inactiveTime > 600000) {
+      if (room.roundTimer) clearTimeout(room.roundTimer);
+      rooms.delete(roomId);
+      deletedCount++;
+      console.log(`🗑️ حذف غرفة منقطعة ${roomId} (${room.players.length} لاعبين offline لـ 10 دقائق)`);
+      continue;
+    }
+    
+    // 3️⃣ حذف الغرف النشطة القديمة جداً بعد ساعة
+    if (hasConnectedPlayers && inactiveTime > 3600000) {
+      if (room.roundTimer) clearTimeout(room.roundTimer);
+      rooms.delete(roomId);
+      deletedCount++;
+      console.log(`🗑️ حذف غرفة قديمة ${roomId} (مرت ساعة كاملة)`);
+      continue;
+    }
+    
+    // 4️⃣ حذف الغرف الجامدة (في waiting أكثر من 20 دقيقة)
+    if (room.status === 'waiting' && hasPlayers && inactiveTime > 1200000) {
+      if (room.roundTimer) clearTimeout(room.roundTimer);
+      rooms.delete(roomId);
+      deletedCount++;
+      console.log(`🗑️ حذف غرفة جامدة ${roomId} (في waiting لـ 20 دقيقة)`);
     }
   }
-}, 600000);
+  
+  if (deletedCount > 0) {
+    console.log(`🧹 تم تنظيف ${deletedCount} غرفة - الغرف المتبقية: ${rooms.size}`);
+  }
+}, 180000); // كل 3 دقائق
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

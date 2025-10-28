@@ -19,22 +19,12 @@ function Lobby() {
   const [wasKicked, setWasKicked] = useState(false);
   const [showDrawingTutorial, setShowDrawingTutorial] = useState(false); // ✅ شرح لعبة الرسم
   const [showCategoriesTutorial, setShowCategoriesTutorial] = useState(false); // ✅ شرح لعبة الفئات
+  const [actualHostName, setActualHostName] = useState(null); // ✅ اسم المضيف الفعلي
+  const [lastGameResults, setLastGameResults] = useState(null); // ✅ نتائج آخر لعبة
+  const [showLastResults, setShowLastResults] = useState(false); // ✅ عرض نتائج آخر لعبة
   
   const hasJoinedRef = useRef(false);
   const isReturningFromResults = useRef(location.state?.fromResults || false);
-
-  // ✅ تحديث isHost بناءً على أول لاعب في القائمة
-  useEffect(() => {
-    if (players.length > 0) {
-      const firstPlayer = players[0];
-      const amIHost = firstPlayer.name === playerName;
-      
-      if (isHost !== amIHost) {
-        console.log(`🔄 تحديث isHost: كان ${isHost}, أصبح ${amIHost}`);
-        setIsHost(amIHost);
-      }
-    }
-  }, [players, playerName]);
 
     useEffect(() => {
   if (!roomId || !playerName) {
@@ -57,15 +47,18 @@ function Lobby() {
     console.log('📤 إرسال join-room');
     socket.emit('join-room', { roomId, playerName });
    } else {
-    console.log('🔄 عودة من النتائج - لا حاجة لإرسال join-room');
+    console.log('🔄 عودة من النتائج - طلب room-update فوراً');
     
-    // ✅ BACKUP: إذا لم نحصل على room-update خلال 3 ثواني، اطلبه يدوياً
+    // ✅ طلب room-update فوراً عند العودة
+    socket.emit('get-room-state', { roomId });
+    
+    // ✅ BACKUP: إذا لم نحصل على room-update خلال 1 ثانية، اطلبه مرة أخرى
     setTimeout(() => {
       if (players.length === 0) {
-        console.log('⚠️ لم نحصل على players بعد 3 ثواني - طلب room-update يدوياً');
+        console.log('⚠️ لم نحصل على players بعد 1 ثانية - طلب room-update مرة أخرى');
         socket.emit('get-room-state', { roomId });
       }
-    }, 3000);
+    }, 1000);
   }
 
   socket.on('room-update', (data) => {
@@ -73,10 +66,19 @@ function Lobby() {
     console.log('   📋 عدد اللاعبين:', data.players?.length);
     console.log('   👥 اللاعبين:', data.players?.map(p => p.name).join(', '));
     console.log('   🎮 نوع اللعبة:', data.gameType);
+    console.log('   👑 الهوست:', data.hostName);
     
     if (data.players && data.players.length > 0) {
       setPlayers(data.players);
       setGameStatus(data.status);
+      
+      // ✅ حفظ اسم المضيف الفعلي
+      if (data.hostName) {
+        setActualHostName(data.hostName);
+        const amIHost = data.hostName === playerName;
+        setIsHost(amIHost);
+        console.log(`   ✅ أنت ${amIHost ? '👑 المضيف' : '👤 لاعب'}`);
+      }
       
       // ✅ تحديث نوع اللعبة
       if (data.gameType) {
@@ -89,6 +91,12 @@ function Lobby() {
     } else {
       console.warn('⚠️ room-update بدون لاعبين!');
     }
+    
+    // ✅ حفظ نتائج آخر لعبة إذا كانت موجودة
+    if (data.lastResults && data.lastResults.length > 0) {
+      setLastGameResults(data.lastResults);
+      console.log('📊 تم استقبال نتائج آخر لعبة:', data.lastResults.length, 'لاعبين');
+    }
   });
 
   socket.on('game-restarting', (data) => {
@@ -98,8 +106,15 @@ function Lobby() {
     console.log('   📋 اللاعبين في state:', players.length);
     
     setGameType(data.gameType);
+    setActualHostName(data.hostName);
     const amIHost = data.hostName === playerName;
     setIsHost(amIHost);
+    
+    // ✅ حفظ نتائج آخر لعبة إذا كانت موجودة
+    if (data.lastResults && data.lastResults.length > 0) {
+      setLastGameResults(data.lastResults);
+    }
+    
     console.log(`   ✅ أنت ${amIHost ? '👑 المضيف' : '👤 لاعب'}`);
   });
 
@@ -307,7 +322,11 @@ function Lobby() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center p-4">
+    <div className={`min-h-screen flex items-center justify-center p-4 transition-all duration-1000 ${
+      gameType === 'drawing' 
+        ? 'bg-gradient-to-br from-pink-900 via-purple-900 to-pink-800 animate-gradient-x' 
+        : 'bg-gradient-to-br from-blue-900 via-cyan-900 to-indigo-900 animate-gradient-x'
+    }`}>
       
       {/* نافذة شرح لعبة الرسم */}
       {showDrawingTutorial && (
@@ -503,50 +522,110 @@ function Lobby() {
       )}
 
       <div className="w-full max-w-2xl">
-        <div className="bg-slate-800/90 backdrop-blur-sm rounded-3xl p-6 sm:p-8 shadow-2xl border border-purple-500/20">
+        <div className={`backdrop-blur-sm rounded-3xl p-6 sm:p-8 shadow-2xl border-2 transition-all duration-700 ${
+          gameType === 'drawing'
+            ? 'bg-gradient-to-br from-pink-900/40 to-purple-900/40 border-pink-500/30 shadow-pink-500/20'
+            : 'bg-gradient-to-br from-blue-900/40 to-cyan-900/40 border-cyan-500/30 shadow-cyan-500/20'
+        }`}>
           {/* العنوان */}
           <div className="text-center mb-6">
-            <h1 className="text-3xl sm:text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400 mb-2">
-              🎮 غرفة الانتظار
+            <div className={`text-5xl sm:text-6xl mb-3 animate-bounce ${
+              gameType === 'drawing' ? 'animate-pulse' : ''
+            }`}>
+              {gameType === 'drawing' ? '🎨' : '⚡'}
+            </div>
+            <h1 className={`text-3xl sm:text-4xl font-bold mb-2 transition-all duration-500 ${
+              gameType === 'drawing'
+                ? 'text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-400 to-pink-400'
+                : 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-cyan-400'
+            }`}>
+              {gameType === 'drawing' ? '🎨 غرفة الرسم' : '⚡ غرفة الفئات'}
             </h1>
-            <p className="text-purple-300 text-sm sm:text-base">في انتظار بدء اللعبة...</p>
+            <p className={`transition-all duration-500 ${
+              gameType === 'drawing' ? 'text-pink-300' : 'text-cyan-300'
+            }`}>
+              {gameType === 'drawing' ? 'ارسم وخمن واستمتع!' : 'أجب بسرعة واربح!'}
+            </p>
           </div>
 
           {/* رمز الغرفة */}
-          <div className="mb-6 p-4 sm:p-6 bg-gradient-to-r from-purple-900/50 to-pink-900/50 rounded-2xl border border-purple-500/30">
+          <div className={`mb-6 p-4 sm:p-6 rounded-2xl border transition-all duration-500 ${
+            gameType === 'drawing'
+              ? 'bg-gradient-to-r from-pink-900/50 to-purple-900/50 border-pink-500/30'
+              : 'bg-gradient-to-r from-blue-900/50 to-cyan-900/50 border-cyan-500/30'
+          }`}>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 mb-2">
               <span className="text-slate-300 font-semibold text-sm sm:text-base whitespace-nowrap">
                 رمز الغرفة:
               </span>
-              <span className="text-2xl sm:text-3xl font-bold text-white tracking-wider bg-slate-900/50 px-4 sm:px-6 py-2 rounded-xl border border-purple-500/30">
+              <span className={`text-2xl sm:text-3xl font-bold text-white tracking-wider px-4 sm:px-6 py-2 rounded-xl border transition-all duration-500 ${
+                gameType === 'drawing'
+                  ? 'bg-pink-950/50 border-pink-500/30'
+                  : 'bg-blue-950/50 border-cyan-500/30'
+              }`}>
                 {roomId}
               </span>
               <button
                 onClick={copyRoomId}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl transition-all shadow-lg hover:shadow-purple-500/50 font-semibold text-sm sm:text-base"
+                className={`text-white px-4 py-2 rounded-xl transition-all shadow-lg font-semibold text-sm sm:text-base ${
+                  gameType === 'drawing'
+                    ? 'bg-pink-600 hover:bg-pink-700 hover:shadow-pink-500/50'
+                    : 'bg-cyan-600 hover:bg-cyan-700 hover:shadow-cyan-500/50'
+                }`}
               >
                 {copied ? '✓ تم النسخ' : '📋 نسخ'}
               </button>
             </div>
-            <p className="text-purple-300 text-xs sm:text-sm text-center">
+            <p className={`text-xs sm:text-sm text-center transition-all duration-500 ${
+              gameType === 'drawing' ? 'text-pink-300' : 'text-cyan-300'
+            }`}>
               شارك هذا الرمز مع أصدقائك للانضمام
             </p>
           </div>
 
           {/* اللاعبون */}
           <div className="mb-6">
-            <h3 className="text-white text-lg sm:text-xl font-bold mb-4 flex items-center justify-between">
+            <h3 className={`text-lg sm:text-xl font-bold mb-4 flex items-center justify-between transition-all duration-500 ${
+              gameType === 'drawing' ? 'text-pink-200' : 'text-cyan-200'
+            }`}>
               <span>👥 اللاعبون</span>
-              <span className="text-purple-400">({players.length}/4)</span>
+              <div className="flex items-center gap-2">
+                <span className={`transition-all duration-500 ${
+                  gameType === 'drawing' ? 'text-pink-400' : 'text-cyan-400'
+                }`}>({players.length}/4)</span>
+                
+                {/* ✅ أيقونة كأس نتائج آخر لعبة */}
+                {lastGameResults && (
+                  <button
+                    onClick={() => setShowLastResults(true)}
+                    className={`p-2 rounded-lg transition-all hover:scale-110 active:scale-95 ${
+                      gameType === 'drawing'
+                        ? 'bg-yellow-600/30 hover:bg-yellow-600/50 text-yellow-300 border border-yellow-500/30'
+                        : 'bg-green-600/30 hover:bg-green-600/50 text-green-300 border border-green-500/30'
+                    }`}
+                    title="نتائج آخر لعبة"
+                  >
+                    <span className="text-xl">🏆</span>
+                  </button>
+                )}
+              </div>
             </h3>
             <div className="space-y-3">
               {players.map((player, index) => (
                 <div
                   key={index}
-                  className="flex items-center justify-between p-3 sm:p-4 bg-slate-700/50 rounded-xl border border-purple-500/20 hover:border-purple-500/40 transition-all"
+                  className={`flex items-center justify-between p-3 sm:p-4 rounded-xl border transition-all duration-500 ${
+                    gameType === 'drawing'
+                      ? 'bg-pink-900/30 border-pink-500/20 hover:border-pink-500/40 hover:bg-pink-900/50'
+                      : 'bg-blue-900/30 border-cyan-500/20 hover:border-cyan-500/40 hover:bg-blue-900/50'
+                  }`}
                 >
                   <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0">
+                    <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0 transition-all duration-500 ${
+                      gameType === 'drawing'
+                        ? 'bg-gradient-to-br from-pink-500 to-purple-500'
+                        : 'bg-gradient-to-br from-cyan-500 to-blue-500'
+                    }`}>
                       {player.name?.charAt(0) || '؟'}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -554,7 +633,7 @@ function Lobby() {
                         {player.name}
                       </span>
                       <div className="flex flex-wrap gap-2 mt-1">
-                        {index === 0 && (
+                        {actualHostName === player.name && (
                           <span className="text-xs bg-yellow-500/20 text-yellow-300 px-2 py-0.5 rounded-full border border-yellow-500/30">
                             👑 المضيف
                           </span>
@@ -604,54 +683,64 @@ function Lobby() {
                 🎮 نوع اللعبة
               </h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <button
-                    onClick={() => handleChangeGameType('drawing')}
-                    className={`w-full p-4 rounded-2xl border-2 transition-all ${
-                      gameType === 'drawing'
-                        ? 'bg-gradient-to-br from-pink-600 to-purple-700 text-white border-pink-400 shadow-lg scale-105'
-                        : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:border-pink-500/50'
-                    }`}
-                  >
-                    <div className="text-3xl mb-2">🎨</div>
-                    <div className="font-bold text-sm sm:text-base mb-1">لعبة الرسم</div>
-                    <div className="text-xs text-slate-400">
-                      ارسم وخمن
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => setShowDrawingTutorial(true)}
-                    className="w-full mt-2 px-3 py-2 bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 rounded-xl text-xs sm:text-sm font-semibold transition-all border border-purple-500/30"
-                  >
-                    ❓ كيف ألعب؟
-                  </button>
-                </div>
-                
-                <div>
-                  <button
-                    onClick={() => handleChangeGameType('categories')}
-                    className={`w-full p-4 rounded-2xl border-2 transition-all ${
-                      gameType === 'categories'
-                        ? 'bg-gradient-to-br from-blue-600 to-cyan-700 text-white border-blue-400 shadow-lg scale-105'
-                        : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:border-blue-500/50'
-                    }`}
-                  >
-                    <div className="text-3xl mb-2">⚡</div>
-                    <div className="font-bold text-sm sm:text-base mb-1">لعبة الفئات</div>
-                    <div className="text-xs text-slate-400">
-                      أجب على الأسئلة
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => setShowCategoriesTutorial(true)}
-                    className="w-full mt-2 px-3 py-2 bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 rounded-xl text-xs sm:text-sm font-semibold transition-all border border-blue-500/30"
-                  >
-                    ❓ كيف ألعب؟
-                  </button>
-                </div>
+                <button
+                  onClick={() => handleChangeGameType('drawing')}
+                  className={`w-full p-4 rounded-2xl border-2 transition-all ${
+                    gameType === 'drawing'
+                      ? 'bg-gradient-to-br from-pink-600 to-purple-700 text-white border-pink-400 shadow-lg scale-105'
+                      : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:border-pink-500/50'
+                  }`}
+                >
+                  <div className="text-3xl mb-2">🎨</div>
+                  <div className="font-bold text-sm sm:text-base mb-1">لعبة الرسم</div>
+                  <div className="text-xs text-slate-400">
+                    ارسم وخمن
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => handleChangeGameType('categories')}
+                  className={`w-full p-4 rounded-2xl border-2 transition-all ${
+                    gameType === 'categories'
+                      ? 'bg-gradient-to-br from-blue-600 to-cyan-700 text-white border-blue-400 shadow-lg scale-105'
+                      : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:border-blue-500/50'
+                  }`}
+                >
+                  <div className="text-3xl mb-2">⚡</div>
+                  <div className="font-bold text-sm sm:text-base mb-1">لعبة الفئات</div>
+                  <div className="text-xs text-slate-400">
+                    أجب على الأسئلة
+                  </div>
+                </button>
               </div>
             </div>
           )}
+
+          {/* ✅ كيف ألعب - للجميع */}
+          <div className="mb-6">
+            <h3 className="text-white text-base sm:text-lg font-bold mb-3 text-center">
+              📚 كيف ألعب؟
+            </h3>
+            <div className="flex justify-center">
+              {gameType === 'drawing' ? (
+                <button
+                  onClick={() => setShowDrawingTutorial(true)}
+                  className="w-full sm:w-auto min-w-[250px] p-5 bg-gradient-to-br from-purple-600/20 to-pink-600/20 hover:from-purple-600/40 hover:to-pink-600/40 text-purple-200 rounded-xl border-2 border-purple-500/30 hover:border-purple-400/50 transition-all font-semibold shadow-lg hover:shadow-purple-500/30 hover:scale-105 active:scale-95"
+                >
+                  <div className="text-4xl mb-2">🎨</div>
+                  <div className="text-base sm:text-lg">شرح لعبة الرسم</div>
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowCategoriesTutorial(true)}
+                  className="w-full sm:w-auto min-w-[250px] p-5 bg-gradient-to-br from-blue-600/20 to-cyan-600/20 hover:from-blue-600/40 hover:to-cyan-600/40 text-blue-200 rounded-xl border-2 border-blue-500/30 hover:border-blue-400/50 transition-all font-semibold shadow-lg hover:shadow-cyan-500/30 hover:scale-105 active:scale-95"
+                >
+                  <div className="text-4xl mb-2">⚡</div>
+                  <div className="text-base sm:text-lg">شرح لعبة الفئات</div>
+                </button>
+              )}
+            </div>
+          </div>
 
           {/* ✅✅✅ خيار وضع الكلمات - للمضيف فقط في لعبة الرسم ✅✅✅ */}
           {isHost && gameType === 'drawing' && (
@@ -732,6 +821,47 @@ function Lobby() {
           </div>
         </div>
       </div>
+
+      {/* ✅ Modal نتائج آخر لعبة */}
+      {showLastResults && lastGameResults && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowLastResults(false)}
+        >
+          <div
+            className="bg-slate-800 rounded-2xl p-6 max-w-md w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white text-xl font-bold">🏆 نتائج آخر لعبة</h3>
+              <button
+                onClick={() => setShowLastResults(false)}
+                className="text-white hover:text-red-400 text-3xl"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              {lastGameResults.map((player, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 bg-slate-700/50 rounded-xl"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${
+                      index === 0 ? 'bg-yellow-500' : index === 1 ? 'bg-gray-400' : index === 2 ? 'bg-orange-600' : 'bg-slate-600'
+                    }`}>
+                      {index + 1}
+                    </div>
+                    <span className="text-white font-semibold">{player.name}</span>
+                  </div>
+                  <span className="text-purple-400 font-bold text-lg">{player.score}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
